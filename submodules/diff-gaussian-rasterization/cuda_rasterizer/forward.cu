@@ -319,6 +319,7 @@ liteRenderCUDA(
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 
 	// Initialize helper variables
+	const bool metric_active = inside && get_flag && metric_map[pix_id] == 1;
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
@@ -481,6 +482,7 @@ renderCUDA(
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 
 	// Initialize helper variables
+	const bool metric_active = inside && get_flag && metric_map[pix_id] == 1;
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
@@ -573,6 +575,10 @@ renderCUDA(
 			POS.y += pos_view[collected_id[j]].y * weight;
 			POS.z += pos_view[collected_id[j]].z * weight;
 			O += weight;
+
+			if (metric_active) {
+				atomicAdd(&(metric_count[collected_id[j]]), 1);
+			}
 
 			if (weight > max_weight) {
 				except_depth = depth[collected_id[j]];
@@ -1196,7 +1202,10 @@ void FORWARD::render(
 	float* out_roughness,
 	float* out_metallic,
 	const bool argmax_depth,
-	const bool inference)
+	const bool inference,
+	const bool get_flag,
+	const int* metric_map,
+	int* metric_count)
 {
 	renderCUDA<NUM_CHANNELS><<<grid, block>>>(
 		W, H,
@@ -1228,7 +1237,10 @@ void FORWARD::render(
 		out_roughness,
 		out_metallic,
 		argmax_depth,
-		inference);
+		inference,
+		get_flag,
+		metric_map,
+		metric_count);
 }
 
 void FORWARD::preprocess(

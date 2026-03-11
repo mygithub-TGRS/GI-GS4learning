@@ -128,7 +128,7 @@ LiteRasterizeGaussiansCUDA(
 
 
 std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
-	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,  	// [3, H, W]
 	const torch::Tensor& means3D,  		// [P, 3]
@@ -156,6 +156,8 @@ RasterizeGaussiansCUDA(
 	const bool prefiltered,
 	const bool argmax_depth,
 	const bool inference,
+	const bool get_flag,
+	const torch::Tensor& metric_map,
 	const bool debug
 ) {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
@@ -180,6 +182,7 @@ RasterizeGaussiansCUDA(
 	torch::Tensor out_roughness = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor out_metallic = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor out_feature = torch::full({feature_dim, H, W}, 0.0, float_opts);
+	torch::Tensor metric_count = torch::full({P}, 0, int_opts);
 	
 	torch::Device device(torch::kCUDA);
 	torch::TensorOptions options(torch::kByte);
@@ -226,6 +229,9 @@ RasterizeGaussiansCUDA(
 			prefiltered,
 			argmax_depth,
 			inference,
+			get_flag,
+			metric_map.contiguous().data_ptr<int>(),
+			metric_count.contiguous().data_ptr<int>(),
 			out_color.contiguous().data<float>(),
 			out_opacity.contiguous().data<float>(),
 			out_depth.contiguous().data<float>(),
@@ -254,7 +260,8 @@ RasterizeGaussiansCUDA(
 		out_albedo,
 		out_roughness,
 		out_metallic,
-		out_feature
+		out_feature,
+		metric_count
 	);
 }
 

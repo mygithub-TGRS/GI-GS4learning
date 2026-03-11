@@ -511,6 +511,9 @@ int CudaRasterizer::Rasterizer::forward(
 	const bool prefiltered,
 	const bool argmax_depth,
 	const bool inference,
+	const bool get_flag,
+	const int* metric_map,
+	int* metric_count,
 	float* out_color,		// [3, H, W]
 	float* out_opacity,		// [1, H, W]
 	float* out_depth,		// [1, H, W]
@@ -669,7 +672,10 @@ int CudaRasterizer::Rasterizer::forward(
 		out_roughness,
 		out_metallic,
 		argmax_depth,
-		inference), debug)
+		inference,
+		get_flag,
+		metric_map,
+		metric_count), debug)
 
 	if (feature_dim > 0) {
 		CHECK_CUDA(FORWARD::render_feature(

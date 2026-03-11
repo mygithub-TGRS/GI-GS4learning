@@ -38,7 +38,7 @@ LiteRasterizeGaussiansCUDA(
 	const bool argmax_depth);
 	
 std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -66,6 +66,8 @@ RasterizeGaussiansCUDA(
 	const bool prefiltered,
 	const bool argmax_depth,
 	const bool inference,
+	const bool get_flag,
+	const torch::Tensor& metric_map,
 	const bool debug);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,

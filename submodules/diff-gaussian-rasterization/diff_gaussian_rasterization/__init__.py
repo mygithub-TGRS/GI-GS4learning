@@ -69,6 +69,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         scales: torch.Tensor,
         rotations: torch.Tensor,
         cov3Ds_precomp: torch.Tensor,
+        get_flag: bool,
+        metric_map: torch.Tensor,
         raster_settings: GaussianRasterizationSettings,
     ) -> Tuple[
         torch.Tensor,
@@ -110,6 +112,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.prefiltered,
             raster_settings.argmax_depth,
             raster_settings.inference,
+            get_flag,
+            metric_map,
             raster_settings.debug,
         )
 
@@ -135,6 +139,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                     roughness_map,
                     metallic_map,
                     feature_map,
+                    accum_metric_counts,
                 ) = _C.rasterize_gaussians(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
@@ -159,6 +164,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 roughness_map,
                 metallic_map,
                 feature_map,
+                accum_metric_counts,
             ) = _C.rasterize_gaussians(*args)
 
         # Keep relevant tensors for backward
@@ -191,7 +197,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             roughness_map,
             metallic_map,
             out_normal_view,
-            feature_map
+            feature_map,
+            accum_metric_counts,
         )
 
     @staticmethod
@@ -206,7 +213,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         grad_out_roughness: Optional[torch.Tensor] = None,
         grad_out_metallic: Optional[torch.Tensor] = None,
         grad_out_normal_view: Optional[torch.Tensor] = None,
-        grad_out_feature: Optional[torch.Tensor] = None
+        grad_out_feature: Optional[torch.Tensor] = None,
+        grad_out_metric_counts: Optional[torch.Tensor] = None,
     ) -> Tuple[
         torch.Tensor,
         torch.Tensor,
@@ -221,7 +229,9 @@ class _RasterizeGaussians(torch.autograd.Function):
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
-        torch.Tensor,
+        None,
+        None,
+        None,
         None,
     ]:
         # Restore necessary values from context
@@ -348,6 +358,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_rotations,
             grad_cov3Ds_precomp,
             None,
+            None,
+            None,
         )
 
         # print(grad_rotations.mean())
@@ -421,6 +433,8 @@ class GaussianRasterizer(nn.Module):
         cov3D_precomp: Optional[torch.Tensor] = None,
         derive_normal: bool = True,
         return_feature: bool = False,
+        get_flag: bool = False,
+        metric_map: Optional[torch.Tensor] = None,
 
     ) -> Tuple[
         torch.Tensor,
@@ -466,6 +480,11 @@ class GaussianRasterizer(nn.Module):
         if cov3D_precomp is None:
             cov3D_precomp = torch.Tensor([])
 
+        if metric_map is None:
+            metric_map = torch.empty(0, dtype=torch.int32, device=means3D.device)
+        else:
+            metric_map = metric_map.to(device=means3D.device, dtype=torch.int32).contiguous().view(-1)
+
         # Invoke C++/CUDA rasterization routine
         (
             color,
@@ -477,7 +496,8 @@ class GaussianRasterizer(nn.Module):
             roughness_map,
             metallic_map,
             out_normal_view,
-            feature_map
+            feature_map,
+            accum_metric_counts,
         ) = _RasterizeGaussians.apply(
             means3D,
             means2D,
@@ -493,6 +513,8 @@ class GaussianRasterizer(nn.Module):
             scales,
             rotations,
             cov3D_precomp,
+            get_flag,
+            metric_map,
             raster_settings,
         )
         # torch.backends.cudnn.benchmark = True
@@ -557,10 +579,12 @@ class GaussianRasterizer(nn.Module):
             roughness_map,
             metallic_map,
             out_normal_view,
-            depth_pos_filter
+            depth_pos_filter,
         )
         if return_feature:
             outputs = outputs + (feature_map,)
+        if get_flag:
+            outputs = outputs + (accum_metric_counts,)
         return outputs
     
 
@@ -654,7 +678,8 @@ class _SSR(torch.autograd.Function):
         None,
         torch.Tensor,
         torch.Tensor,
-        torch.Tensor,
+        None,
+        None,
         None,
     ]:
         # Restore necessary values from context

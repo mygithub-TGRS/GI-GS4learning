@@ -102,7 +102,10 @@ namespace FORWARD
 		float* out_roughness,
 		float* out_metallic,
 		const bool argmax_depth,
-		const bool inference);
+		const bool inference,
+		const bool get_flag,
+		const int* metric_map,
+		int* metric_count);
 
 	void render_feature(
 		const dim3 grid, dim3 block,

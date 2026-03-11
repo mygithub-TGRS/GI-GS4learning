@@ -13,7 +13,7 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn.functional as F
-from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+from diff_gaussian_rasterization_wfeat_optimiazed import GaussianRasterizationSettings, GaussianRasterizer
 
 from arguments import GroupParams
 from scene.cameras import Camera
@@ -42,7 +42,9 @@ def render(
     thick: float = 0.05,
     delta: float = 0.0625,
     step: int = 16,
-    start: int = 8
+    start: int = 8,
+    get_flag: bool = False,
+    metric_map: Optional[torch.Tensor] = None,
 ) -> Dict:
     """
     Render the scene.
@@ -126,20 +128,7 @@ def render(
     else:
         colors_precomp = override_color
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
-    (
-        rendered_image,
-        radii,
-        opacity_map,
-        depth_map,
-        normal_map_from_depth,
-        normal_map,
-        occlusion_map,
-        albedo_map,
-        roughness_map,
-        metallic_map,
-        out_normal_view,
-        depth_pos
-    ) = rasterizer(
+    raster_outputs = rasterizer(
         means3D=means3D,
         means2D=means2D,
         opacities=opacity,
@@ -152,7 +141,26 @@ def render(
         scales=scales,
         rotations=rotations,
         cov3D_precomp=cov3D_precomp,
-        derive_normal=derive_normal)
+        derive_normal=derive_normal,
+        get_flag=get_flag,
+        metric_map=metric_map,
+    )
+    (
+        rendered_image,
+        radii,
+        opacity_map,
+        depth_map,
+        normal_map_from_depth,
+        normal_map,
+        occlusion_map,
+        albedo_map,
+        roughness_map,
+        metallic_map,
+        out_normal_view,
+        depth_pos,
+        *extra_outputs,
+    ) = raster_outputs
+    accum_metric_counts = extra_outputs[-1] if get_flag else None
     
     normal_from_depth_mask = (normal_map_from_depth != 0).all(0)
     normal_mask = (normal_map != 0).all(0, keepdim=True)
@@ -211,5 +219,6 @@ def render(
         "metallic_map": metallic_map,
         "occlusion_map": occlusion_map,
         "out_normal_view": out_normal_view,
-        "depth_pos": depth_pos
+        "depth_pos": depth_pos,
+        "accum_metric_counts": accum_metric_counts,
     }
