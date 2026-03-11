@@ -137,6 +137,17 @@ __global__ void identifyTileRanges(const int L, const uint64_t* point_list_keys,
 		ranges[currtile].y = L;
 }
 
+
+__global__ void perTileBucketCount(int T, const uint2* ranges, uint32_t* bucketCount)
+{
+	auto idx = cg::this_grid().thread_rank();
+	if (idx >= T)
+		return;
+	uint2 range = ranges[idx];
+	int num_splats = range.y - range.x;
+	int num_buckets = (num_splats + 31) / 32;
+	bucketCount[idx] = (uint32_t)num_buckets;
+}
 // Mark Gaussians as visible/invisible, based on view frustum testing
 void CudaRasterizer::Rasterizer::markVisible(
 	int P,
@@ -175,10 +186,29 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 CudaRasterizer::ImageState CudaRasterizer::ImageState::fromChunk(char*& chunk, size_t N)
 {
 	ImageState img;
-	obtain(chunk, img.accum_alpha, N, 128);	// float*
-	obtain(chunk, img.n_contrib, N, 128);	// uint32_t*
-	obtain(chunk, img.ranges, N, 128);		// uint2*
+	obtain(chunk, img.accum_alpha, N, 128);
+	obtain(chunk, img.n_contrib, N, 128);
+	obtain(chunk, img.ranges, N, 128);
+	int* dummy = nullptr;
+	int* wummy = nullptr;
+	cub::DeviceScan::InclusiveSum(nullptr, img.scan_size, dummy, wummy, N);
+	obtain(chunk, img.contrib_scan, img.scan_size, 128);
+	obtain(chunk, img.max_contrib, N, 128);
+	obtain(chunk, img.pixel_colors, N * NUM_CHANNELS, 128);
+	obtain(chunk, img.bucket_count, N, 128);
+	obtain(chunk, img.bucket_offsets, N, 128);
+	cub::DeviceScan::InclusiveSum(nullptr, img.bucket_count_scan_size, img.bucket_count, img.bucket_count, N);
+	obtain(chunk, img.bucket_count_scanning_space, img.bucket_count_scan_size, 128);
 	return img;
+}
+
+CudaRasterizer::SampleState CudaRasterizer::SampleState::fromChunk(char*& chunk, size_t C)
+{
+	SampleState sample;
+	obtain(chunk, sample.bucket_to_tile, C * BLOCK_SIZE, 128);
+	obtain(chunk, sample.T, C * BLOCK_SIZE, 128);
+	obtain(chunk, sample.ar, NUM_CHANNELS * C * BLOCK_SIZE, 128);
+	return sample;
 }
 
 CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chunk, size_t P)
@@ -483,10 +513,11 @@ int CudaRasterizer::Rasterizer::lite_forward(
 
 // Forward rendering procedure for differentiable rasterization
 // of Gaussians.
-int CudaRasterizer::Rasterizer::forward(
+std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> geometryBuffer,
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
+	std::function<char* (size_t)> sampleBuffer,
 	const int P, int D, int M,
 	const float* background,  		// [3, H, W]
 	const int width, int height,
@@ -511,6 +542,8 @@ int CudaRasterizer::Rasterizer::forward(
 	const bool prefiltered,
 	const bool argmax_depth,
 	const bool inference,
+	const bool enable_metric_count,
+	const bool* metric_map,
 	float* out_color,		// [3, H, W]
 	float* out_opacity,		// [1, H, W]
 	float* out_depth,		// [1, H, W]
@@ -520,6 +553,7 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_albedo,		// [3, H, W]
 	float* out_roughness,	// [1, H, W]
 	float* out_metallic,	// [1, H, W]
+	int* metric_count,	// [P]
 	float* out_feature,	// [F, H, W]
 	int* radii,				// [P]
 	bool debug)
@@ -632,6 +666,21 @@ int CudaRasterizer::Rasterizer::forward(
 	}
 	CHECK_CUDA(, debug);
 
+	int num_tiles = tile_grid.x * tile_grid.y;
+	perTileBucketCount<<<(num_tiles + 255) / 256, 256>>>(num_tiles, imgState.ranges, imgState.bucket_count);
+	CHECK_CUDA(cub::DeviceScan::InclusiveSum(
+		imgState.bucket_count_scanning_space, imgState.bucket_count_scan_size,
+		imgState.bucket_count, imgState.bucket_offsets, num_tiles), debug);
+
+	unsigned int bucket_sum = 0;
+	if (num_tiles > 0) {
+		CHECK_CUDA(cudaMemcpy(&bucket_sum, imgState.bucket_offsets + num_tiles - 1,
+			sizeof(unsigned int), cudaMemcpyDeviceToHost), debug);
+	}
+	size_t sample_chunk_size = required<SampleState>(bucket_sum == 0 ? 1 : bucket_sum);
+	char* sample_chunkptr = sampleBuffer(sample_chunk_size);
+	SampleState sampleState = SampleState::fromChunk(sample_chunkptr, bucket_sum == 0 ? 1 : bucket_sum);
+
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
 	const float* normal_ptr = normal;
@@ -646,6 +695,10 @@ int CudaRasterizer::Rasterizer::forward(
 		cam_pos,
 		imgState.ranges,
 		binningState.point_list,
+		imgState.bucket_offsets,
+		sampleState.bucket_to_tile,
+		sampleState.T,
+		sampleState.ar,
 		viewmatrix,
 		feature_ptr,
 		normal_ptr,
@@ -668,6 +721,11 @@ int CudaRasterizer::Rasterizer::forward(
 		out_albedo,
 		out_roughness,
 		out_metallic,
+		imgState.max_contrib,
+		imgState.pixel_colors,
+		metric_count,
+		metric_map,
+		enable_metric_count,
 		argmax_depth,
 		inference), debug)
 
@@ -684,13 +742,13 @@ int CudaRasterizer::Rasterizer::forward(
 			out_feature), debug)
 	}
 
-	return num_rendered;
+	return std::make_tuple(num_rendered, static_cast<int>(bucket_sum));
 }
 
 // Produce necessary gradients for optimization, corresponding
 // to forward render pass
 void CudaRasterizer::Rasterizer::backward(
-	const int P, int D, int M, int R,
+	const int P, int D, int M, int R, int B,
 	const float* background,
 	const int width, int height,
 	const float* means3D,
@@ -714,6 +772,7 @@ void CudaRasterizer::Rasterizer::backward(
 	char* geom_buffer,
 	char* binning_buffer,
 	char* img_buffer,
+	char* sample_buffer,
 	const float* dL_dpix_depth,
 	const float* dL_dpix,
 	const float* dL_dpix_opacity,

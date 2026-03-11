@@ -79,6 +79,10 @@ namespace FORWARD
 		const float* cam_pos,
 		const uint2* ranges,
 		const uint32_t* point_list,
+		const uint32_t* per_tile_bucket_offset,
+		uint32_t* bucket_to_tile,
+		float* sampled_T,
+		float* sampled_ar,
 		const float* viewmatrix,
 		const float* features,
 		const float* normal,
@@ -101,6 +105,11 @@ namespace FORWARD
 		float* out_albedo,
 		float* out_roughness,
 		float* out_metallic,
+		uint32_t* max_contrib,
+		float* pixel_colors,
+		int* metric_count,
+		const bool* metric_map,
+		const bool enable_metric_count,
 		const bool argmax_depth,
 		const bool inference);
 

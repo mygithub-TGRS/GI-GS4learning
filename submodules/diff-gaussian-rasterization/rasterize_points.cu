@@ -82,7 +82,6 @@ LiteRasterizeGaussiansCUDA(
 	std::function<char*(size_t)> geomFunc = resizeFunctional(geomBuffer);
 	std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
 	std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
-	
 	int rendered = 0;
 	if(P != 0) {
 		int M = 0;
@@ -127,8 +126,8 @@ LiteRasterizeGaussiansCUDA(
 }
 
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
-	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
+	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,  	// [3, H, W]
 	const torch::Tensor& means3D,  		// [P, 3]
@@ -156,6 +155,8 @@ RasterizeGaussiansCUDA(
 	const bool prefiltered,
 	const bool argmax_depth,
 	const bool inference,
+	const bool enable_metric_count,
+	const torch::Tensor& metric_map,
 	const bool debug
 ) {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
@@ -180,6 +181,7 @@ RasterizeGaussiansCUDA(
 	torch::Tensor out_roughness = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor out_metallic = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor out_feature = torch::full({feature_dim, H, W}, 0.0, float_opts);
+	torch::Tensor metric_count = torch::full({P}, 0, int_opts);
 	
 	torch::Device device(torch::kCUDA);
 	torch::TensorOptions options(torch::kByte);
@@ -189,18 +191,22 @@ RasterizeGaussiansCUDA(
 	std::function<char*(size_t)> geomFunc = resizeFunctional(geomBuffer);
 	std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
 	std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
+	torch::Tensor sampleBuffer = torch::empty({0}, options.device(device));
+	std::function<char*(size_t)> sampleFunc = resizeFunctional(sampleBuffer);
 	
 	int rendered = 0;
+	int num_buckets = 0;
 	if(P != 0) {
 		int M = 0;
 		if(sh.size(0) != 0) {
 			M = sh.size(1);
 		}
 
-		rendered = CudaRasterizer::Rasterizer::forward(
+		auto forward_result = CudaRasterizer::Rasterizer::forward(
 			geomFunc,
 			binningFunc,
 			imgFunc,
+			sampleFunc,
 			P, degree, M,
 			background.contiguous().data<float>(),
 			W, H,
@@ -226,6 +232,8 @@ RasterizeGaussiansCUDA(
 			prefiltered,
 			argmax_depth,
 			inference,
+			enable_metric_count,
+			enable_metric_count ? metric_map.contiguous().data_ptr<bool>() : nullptr,
 			out_color.contiguous().data<float>(),
 			out_opacity.contiguous().data<float>(),
 			out_depth.contiguous().data<float>(),
@@ -235,9 +243,12 @@ RasterizeGaussiansCUDA(
 			out_albedo.contiguous().data<float>(),
 			out_roughness.contiguous().data<float>(),
 			out_metallic.contiguous().data<float>(),
+			metric_count.contiguous().data<int>(),
 			out_feature.contiguous().data<float>(),
 			radii.contiguous().data<int>(),
 			debug);
+		rendered = std::get<0>(forward_result);
+		num_buckets = std::get<1>(forward_result);
   	}
   	return std::make_tuple(
 		rendered,
@@ -254,7 +265,9 @@ RasterizeGaussiansCUDA(
 		out_albedo,
 		out_roughness,
 		out_metallic,
-		out_feature
+		out_feature,
+		metric_count,
+		sampleBuffer
 	);
 }
 
@@ -293,7 +306,9 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& geomBuffer,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
+	const torch::Tensor& sampleBuffer,
 	const int R,
+	const int B,
 	const bool debug
 ) {
 	const int P = means3D.size(0);
@@ -323,7 +338,7 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
 	
 	if(P != 0) {  
-		CudaRasterizer::Rasterizer::backward(P, degree, M, R,
+		CudaRasterizer::Rasterizer::backward(P, degree, M, R, B,
 			background.contiguous().data<float>(),
 			W, H, 
 			means3D.contiguous().data<float>(),
@@ -348,6 +363,7 @@ RasterizeGaussiansBackwardCUDA(
 			reinterpret_cast<char*>(geomBuffer.contiguous().data_ptr()),
 			reinterpret_cast<char*>(binningBuffer.contiguous().data_ptr()),
 			reinterpret_cast<char*>(imageBuffer.contiguous().data_ptr()),
+			reinterpret_cast<char*>(sampleBuffer.contiguous().data_ptr()),
 			dL_dout_depth.contiguous().data<float>(),
 			dL_dout_color.contiguous().data<float>(),
     		dL_dout_opacity.contiguous().data<float>(),

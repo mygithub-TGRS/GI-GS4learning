@@ -15,6 +15,7 @@
 #include <cooperative_groups.h>
 #include <math.h>
 #include <cooperative_groups/reduce.h>
+#include <cub/cub.cuh>
 namespace cg = cooperative_groups;
 
 // Forward method for converting the input spherical harmonics
@@ -429,6 +430,10 @@ renderCUDA(
 	const float* cam_pos,
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
+	const uint32_t* __restrict__ per_tile_bucket_offset,
+	uint32_t* __restrict__ bucket_to_tile,
+	float* __restrict__ sampled_T,
+	float* __restrict__ sampled_ar,
 	const float* viewmatrix,
 	const float* __restrict__ features,
 	const float* __restrict__ normals,
@@ -451,6 +456,11 @@ renderCUDA(
 	float* __restrict__ out_albedo,
 	float* __restrict__ out_roughness,
 	float* __restrict__ out_metallic,
+	uint32_t* __restrict__ max_contrib,
+	float* __restrict__ pixel_colors,
+	int* __restrict__ metric_count,
+	const bool* __restrict__ metric_map,
+	bool enable_metric_count,
 	bool argmax_depth,
 	bool inference)
 {
@@ -471,9 +481,18 @@ renderCUDA(
 	bool done = !inside;
 
 	// Load start/end range of IDs to process in bit sorted list.
-	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
+	uint32_t tile_id = block.group_index().y * horizontal_blocks + block.group_index().x;
+	uint2 range = ranges[tile_id];
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 	int toDo = range.y - range.x;
+	uint32_t bucket_base = tile_id == 0 ? 0 : per_tile_bucket_offset[tile_id - 1];
+	int num_buckets = (toDo + 31) / 32;
+	for (int i = 0; i < (num_buckets + BLOCK_SIZE - 1) / BLOCK_SIZE; ++i) {
+		int bucket_idx = i * BLOCK_SIZE + block.thread_rank();
+		if (bucket_idx < num_buckets)
+			bucket_to_tile[bucket_base + bucket_idx] = tile_id;
+	}
+	uint32_t bucket_write_idx = bucket_base;
 
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
@@ -521,6 +540,12 @@ renderCUDA(
 		// Iterate over current batch
 		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
 		{
+			if ((contributor % 32) == 0) {
+				sampled_T[(bucket_write_idx * BLOCK_SIZE) + block.thread_rank()] = T;
+				for (int ch = 0; ch < CHANNELS; ++ch)
+					sampled_ar[(bucket_write_idx * BLOCK_SIZE * CHANNELS) + ch * BLOCK_SIZE + block.thread_rank()] = C[ch];
+				++bucket_write_idx;
+			}
 			// Keep track of current position in range
 			contributor++;
 
@@ -562,6 +587,9 @@ renderCUDA(
 				A[ch] += albedo[collected_id[j] * CHANNELS + ch] * weight;
                 //if (NoV > 0.0f) // NOTE: the trick from GIR, do not make scene for scenes
 				N[ch] += normals[collected_id[j] * CHANNELS + ch] * weight;
+			}
+			if (enable_metric_count && metric_map != nullptr && metric_map[pix_id]) {
+				atomicAdd(&(metric_count[collected_id[j]]), 1);
 			}
 			R += roughness[collected_id[j]] * weight;
 			M += metallic[collected_id[j]] * weight;
@@ -605,6 +633,7 @@ renderCUDA(
 		out_normal_view[2 * H * W + pix_id] = N_view.z;
 		
 		for (int ch = 0; ch < CHANNELS; ch++) {
+			pixel_colors[ch * H * W + pix_id] = C[ch];
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 			out_normal[ch * H * W + pix_id] = N[ch];
 			out_albedo[ch * H * W + pix_id] = A[ch];
@@ -630,6 +659,11 @@ renderCUDA(
 
 		out_opacity[pix_id] = O;
 	}
+	typedef cub::BlockReduce<uint32_t, BLOCK_X, cub::BLOCK_REDUCE_WARP_REDUCTIONS, BLOCK_Y> BlockReduce;
+	__shared__ typename BlockReduce::TempStorage temp_storage;
+	last_contributor = BlockReduce(temp_storage).Reduce(last_contributor, cub::Max());
+	if (block.thread_rank() == 0)
+		max_contrib[tile_id] = last_contributor;
 }
 
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
@@ -1173,6 +1207,10 @@ void FORWARD::render(
 	const float* cam_pos,
 	const uint2* ranges,
 	const uint32_t* point_list,
+	const uint32_t* per_tile_bucket_offset,
+	uint32_t* bucket_to_tile,
+	float* sampled_T,
+	float* sampled_ar,
 	const float* viewmatrix,
 	const float* colors,
 	const float* normal,
@@ -1195,6 +1233,11 @@ void FORWARD::render(
 	float* out_albedo,
 	float* out_roughness,
 	float* out_metallic,
+	uint32_t* max_contrib,
+	float* pixel_colors,
+	int* metric_count,
+	const bool* metric_map,
+	const bool enable_metric_count,
 	const bool argmax_depth,
 	const bool inference)
 {
@@ -1205,6 +1248,10 @@ void FORWARD::render(
 		cam_pos,
 		ranges,
 		point_list,
+		per_tile_bucket_offset,
+		bucket_to_tile,
+		sampled_T,
+		sampled_ar,
 		viewmatrix,
 		colors,
 		normal,
@@ -1227,6 +1274,11 @@ void FORWARD::render(
 		out_albedo,
 		out_roughness,
 		out_metallic,
+		max_contrib,
+		pixel_colors,
+		metric_count,
+		metric_map,
+		enable_metric_count,
 		argmax_depth,
 		inference);
 }

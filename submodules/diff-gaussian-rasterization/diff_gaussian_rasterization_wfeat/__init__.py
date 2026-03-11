@@ -49,6 +49,8 @@ class GaussianRasterizationSettings(NamedTuple):
     debug: bool
     inference: bool
     argmax_depth: bool
+    enable_metric_count: bool = False
+    metric_map: torch.Tensor = torch.empty(0, dtype=torch.bool)
 
 
 class _RasterizeGaussians(torch.autograd.Function):
@@ -110,6 +112,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.prefiltered,
             raster_settings.argmax_depth,
             raster_settings.inference,
+            raster_settings.enable_metric_count,
+            raster_settings.metric_map,
             raster_settings.debug,
         )
 
@@ -121,6 +125,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             try:
                 (
                     num_rendered,
+                    num_buckets,
                     color,
                     radii,
                     geomBuffer,
@@ -135,6 +140,8 @@ class _RasterizeGaussians(torch.autograd.Function):
                     roughness_map,
                     metallic_map,
                     feature_map,
+                    metric_counts,
+                    sample_buffer,
                 ) = _C.rasterize_gaussians(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
@@ -145,6 +152,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         else:
             (
                 num_rendered,
+                num_buckets,
                 color,
                 radii,
                 geomBuffer,
@@ -159,11 +167,14 @@ class _RasterizeGaussians(torch.autograd.Function):
                 roughness_map,
                 metallic_map,
                 feature_map,
+                metric_counts,
+                sample_buffer,
             ) = _C.rasterize_gaussians(*args)
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
+        ctx.num_buckets = num_buckets
         ctx.save_for_backward(
             colors_precomp,
             normal,
@@ -180,6 +191,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             geomBuffer,
             binningBuffer,
             imgBuffer,
+            sample_buffer,
         )
         return (
             color,
@@ -191,7 +203,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             roughness_map,
             metallic_map,
             out_normal_view,
-            feature_map
+            feature_map,
+            metric_counts,
         )
 
     @staticmethod
@@ -227,6 +240,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         # Restore necessary values from context
         # print("begin")
         num_rendered = ctx.num_rendered
+        num_buckets = ctx.num_buckets
         raster_settings = ctx.raster_settings
         (
             colors_precomp,
@@ -244,6 +258,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             geomBuffer,
             binningBuffer,
             imgBuffer,
+            sample_buffer,
         ) = ctx.saved_tensors
 
        
@@ -283,7 +298,9 @@ class _RasterizeGaussians(torch.autograd.Function):
             geomBuffer,
             binningBuffer,
             imgBuffer,
+            sample_buffer,
             num_rendered,
+            num_buckets,
             raster_settings.debug,
         )
 
@@ -421,6 +438,7 @@ class GaussianRasterizer(nn.Module):
         cov3D_precomp: Optional[torch.Tensor] = None,
         derive_normal: bool = True,
         return_feature: bool = False,
+        return_metric_counts: bool = False,
 
     ) -> Tuple[
         torch.Tensor,
@@ -477,7 +495,8 @@ class GaussianRasterizer(nn.Module):
             roughness_map,
             metallic_map,
             out_normal_view,
-            feature_map
+            feature_map,
+            metric_counts,
         ) = _RasterizeGaussians.apply(
             means3D,
             means2D,
@@ -561,6 +580,8 @@ class GaussianRasterizer(nn.Module):
         )
         if return_feature:
             outputs = outputs + (feature_map,)
+        if return_metric_counts:
+            outputs = outputs + (metric_counts,)
         return outputs
     
 

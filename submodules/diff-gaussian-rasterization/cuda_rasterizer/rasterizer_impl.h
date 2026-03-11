@@ -49,8 +49,25 @@ namespace CudaRasterizer
 		uint2* ranges;
 		uint32_t* n_contrib;
 		float* accum_alpha;
+		size_t scan_size;
+		char* contrib_scan;
+		uint32_t* max_contrib;
+		float* pixel_colors;
+		uint32_t* bucket_count;
+		uint32_t* bucket_offsets;
+		size_t bucket_count_scan_size;
+		char* bucket_count_scanning_space;
 
 		static ImageState fromChunk(char*& chunk, size_t N);
+	};
+
+	struct SampleState
+	{
+		uint32_t* bucket_to_tile;
+		float* T;
+		float* ar;
+
+		static SampleState fromChunk(char*& chunk, size_t C);
 	};
 
 	struct BinningState

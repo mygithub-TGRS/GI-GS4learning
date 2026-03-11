@@ -14,6 +14,7 @@
 
 #include <vector>
 #include <functional>
+#include <tuple>
 
 namespace CudaRasterizer
 {
@@ -113,10 +114,11 @@ namespace CudaRasterizer
 			float* out_depth,
 			int* radii = nullptr);
 
-		static int forward(
+		static std::tuple<int, int> forward(
 			std::function<char* (size_t)> geometryBuffer,
 			std::function<char* (size_t)> binningBuffer,
 			std::function<char* (size_t)> imageBuffer,
+			std::function<char* (size_t)> sampleBuffer,
 			const int P, int D, int M,
 			const float* background,
 			const int width, int height,
@@ -141,6 +143,8 @@ namespace CudaRasterizer
 			const bool prefiltered,
 			const bool argmax_depth,
 			const bool inference,
+			const bool enable_metric_count,
+			const bool* metric_map,
 			float* out_color,
 			float* out_opacity,
 			float* out_depth,
@@ -150,12 +154,13 @@ namespace CudaRasterizer
 			float* out_albedo,
 			float* out_roughness,
 			float* out_metallic,
+			int* metric_count,
 			float* out_feature,
 			int* radii = nullptr,
 			bool debug = false);
 
 		static void backward(
-			const int P, int D, int M, int R,
+			const int P, int D, int M, int R, int B,
 			const float* background,
 			const int width, int height,
 			const float* means3D,
@@ -179,6 +184,7 @@ namespace CudaRasterizer
 			char* geom_buffer,
 			char* binning_buffer,
 			char* image_buffer,
+			char* sample_buffer,
 			const float* dL_dpix_depth,
 			const float* dL_dpix,
 			const float* dL_dpix_opacity,
