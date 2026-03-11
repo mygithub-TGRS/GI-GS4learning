@@ -42,7 +42,9 @@ def render(
     thick: float = 0.05,
     delta: float = 0.0625,
     step: int = 16,
-    start: int = 8
+    start: int = 8,
+    get_metric_count: bool = False,
+    metric_map: Optional[torch.Tensor] = None
 ) -> Dict:
     """
     Render the scene.
@@ -58,6 +60,13 @@ def render(
         screenspace_points.retain_grad()
     except:
         pass
+
+    if get_metric_count:
+        if metric_map is None:
+            raise ValueError("metric_map must be provided when get_metric_count is True")
+        metric_map = metric_map.contiguous().to(device="cuda", dtype=torch.int32)
+    else:
+        metric_map = torch.empty(0, dtype=torch.int32, device="cuda")
 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
@@ -84,6 +93,8 @@ def render(
         debug=pipe.debug,
         inference=inference,
         argmax_depth=False,
+        get_metric_count=get_metric_count,
+        metric_map=metric_map,
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -138,7 +149,8 @@ def render(
         roughness_map,
         metallic_map,
         out_normal_view,
-        depth_pos
+        depth_pos,
+        metric_count
     ) = rasterizer(
         means3D=means3D,
         means2D=means2D,
@@ -211,5 +223,6 @@ def render(
         "metallic_map": metallic_map,
         "occlusion_map": occlusion_map,
         "out_normal_view": out_normal_view,
-        "depth_pos": depth_pos
+        "depth_pos": depth_pos,
+        "accum_metric_counts": metric_count
     }

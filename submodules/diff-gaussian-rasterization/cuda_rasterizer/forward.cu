@@ -308,6 +308,7 @@ liteRenderCUDA(
 	// Done threads can help with fetching, but don't rasterize
 	bool done = !inside;
 
+
 	// Load start/end range of IDs to process in bit sorted list.
 	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
@@ -452,7 +453,10 @@ renderCUDA(
 	float* __restrict__ out_roughness,
 	float* __restrict__ out_metallic,
 	bool argmax_depth,
-	bool inference)
+	bool inference,
+	bool get_metric_count,
+	const int* __restrict__ metric_map,
+	int* __restrict__ metric_count)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -469,6 +473,9 @@ renderCUDA(
 	bool inside = pix.x < W && pix.y < H;
 	// Done threads can help with fetching, but don't rasterize
 	bool done = !inside;
+
+	const bool count_metric_for_pixel =
+		get_metric_count && inside && metric_map != nullptr && metric_count != nullptr && metric_map[pix_id] == 1;
 
 	// Load start/end range of IDs to process in bit sorted list.
 	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
@@ -562,6 +569,11 @@ renderCUDA(
 				A[ch] += albedo[collected_id[j] * CHANNELS + ch] * weight;
                 //if (NoV > 0.0f) // NOTE: the trick from GIR, do not make scene for scenes
 				N[ch] += normals[collected_id[j] * CHANNELS + ch] * weight;
+			}
+
+			if (count_metric_for_pixel)
+			{
+				atomicAdd(&(metric_count[collected_id[j]]), 1);
 			}
 			R += roughness[collected_id[j]] * weight;
 			M += metallic[collected_id[j]] * weight;
@@ -1199,7 +1211,10 @@ void FORWARD::render(
 	float* out_roughness,
 	float* out_metallic,
 	const bool argmax_depth,
-	const bool inference)
+	const bool inference,
+	const bool get_metric_count,
+	const int* metric_map,
+	int* metric_count)
 {
 	renderCUDA<NUM_CHANNELS><<<grid, block>>>(
 		W, H,
@@ -1231,7 +1246,10 @@ void FORWARD::render(
 		out_roughness,
 		out_metallic,
 		argmax_depth,
-		inference);
+		inference,
+		get_metric_count,
+		metric_map,
+		metric_count);
 }
 
 void FORWARD::preprocess(

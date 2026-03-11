@@ -49,6 +49,8 @@ class GaussianRasterizationSettings(NamedTuple):
     debug: bool
     inference: bool
     argmax_depth: bool
+    get_metric_count: bool
+    metric_map: torch.Tensor
 
 
 class _RasterizeGaussians(torch.autograd.Function):
@@ -71,6 +73,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         cov3Ds_precomp: torch.Tensor,
         raster_settings: GaussianRasterizationSettings,
     ) -> Tuple[
+        torch.Tensor,
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
@@ -110,6 +113,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.prefiltered,
             raster_settings.argmax_depth,
             raster_settings.inference,
+            raster_settings.get_metric_count,
+            raster_settings.metric_map,
             raster_settings.debug,
         )
 
@@ -135,6 +140,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                     roughness_map,
                     metallic_map,
                     feature_map,
+                    metric_count,
                 ) = _C.rasterize_gaussians(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
@@ -159,6 +165,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 roughness_map,
                 metallic_map,
                 feature_map,
+                metric_count,
             ) = _C.rasterize_gaussians(*args)
 
         # Keep relevant tensors for backward
@@ -191,7 +198,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             roughness_map,
             metallic_map,
             out_normal_view,
-            feature_map
+            feature_map,
+            metric_count
         )
 
     @staticmethod
@@ -206,7 +214,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         grad_out_roughness: Optional[torch.Tensor] = None,
         grad_out_metallic: Optional[torch.Tensor] = None,
         grad_out_normal_view: Optional[torch.Tensor] = None,
-        grad_out_feature: Optional[torch.Tensor] = None
+        grad_out_feature: Optional[torch.Tensor] = None,
+        grad_metric_count: Optional[torch.Tensor] = None
     ) -> Tuple[
         torch.Tensor,
         torch.Tensor,
@@ -434,6 +443,7 @@ class GaussianRasterizer(nn.Module):
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
+        torch.Tensor,
         torch.Tensor
     ]:
         raster_settings = self.raster_settings
@@ -477,7 +487,8 @@ class GaussianRasterizer(nn.Module):
             roughness_map,
             metallic_map,
             out_normal_view,
-            feature_map
+            feature_map,
+            metric_count
         ) = _RasterizeGaussians.apply(
             means3D,
             means2D,
@@ -557,7 +568,8 @@ class GaussianRasterizer(nn.Module):
             roughness_map,
             metallic_map,
             out_normal_view,
-            depth_pos_filter
+            depth_pos_filter,
+            metric_count,
         )
         if return_feature:
             outputs = outputs + (feature_map,)

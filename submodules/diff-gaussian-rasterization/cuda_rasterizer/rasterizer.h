@@ -141,6 +141,8 @@ namespace CudaRasterizer
 			const bool prefiltered,
 			const bool argmax_depth,
 			const bool inference,
+			const bool get_metric_count,
+			const int* metric_map,
 			float* out_color,
 			float* out_opacity,
 			float* out_depth,
@@ -150,6 +152,7 @@ namespace CudaRasterizer
 			float* out_albedo,
 			float* out_roughness,
 			float* out_metallic,
+			int* metric_count,
 			float* out_feature,
 			int* radii = nullptr,
 			bool debug = false);

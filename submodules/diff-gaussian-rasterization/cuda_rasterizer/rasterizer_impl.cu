@@ -511,6 +511,8 @@ int CudaRasterizer::Rasterizer::forward(
 	const bool prefiltered,
 	const bool argmax_depth,
 	const bool inference,
+	const bool get_metric_count,
+	const int* metric_map,
 	float* out_color,		// [3, H, W]
 	float* out_opacity,		// [1, H, W]
 	float* out_depth,		// [1, H, W]
@@ -520,6 +522,7 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_albedo,		// [3, H, W]
 	float* out_roughness,	// [1, H, W]
 	float* out_metallic,	// [1, H, W]
+	int* metric_count,		// [P]
 	float* out_feature,	// [F, H, W]
 	int* radii,				// [P]
 	bool debug)
@@ -669,7 +672,10 @@ int CudaRasterizer::Rasterizer::forward(
 		out_roughness,
 		out_metallic,
 		argmax_depth,
-		inference), debug)
+		inference,
+		get_metric_count,
+		metric_map,
+		metric_count), debug)
 
 	if (feature_dim > 0) {
 		CHECK_CUDA(FORWARD::render_feature(

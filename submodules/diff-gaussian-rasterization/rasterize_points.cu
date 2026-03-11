@@ -83,6 +83,7 @@ LiteRasterizeGaussiansCUDA(
 	std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
 	std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
 	
+
 	int rendered = 0;
 	if(P != 0) {
 		int M = 0;
@@ -128,7 +129,7 @@ LiteRasterizeGaussiansCUDA(
 
 
 std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
-	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,  	// [3, H, W]
 	const torch::Tensor& means3D,  		// [P, 3]
@@ -156,6 +157,8 @@ RasterizeGaussiansCUDA(
 	const bool prefiltered,
 	const bool argmax_depth,
 	const bool inference,
+	const bool get_metric_count,
+	const torch::Tensor& metric_map,
 	const bool debug
 ) {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
@@ -180,6 +183,7 @@ RasterizeGaussiansCUDA(
 	torch::Tensor out_roughness = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor out_metallic = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor out_feature = torch::full({feature_dim, H, W}, 0.0, float_opts);
+	torch::Tensor metric_count = get_metric_count ? torch::full({P}, 0, int_opts) : torch::empty({0}, int_opts);
 	
 	torch::Device device(torch::kCUDA);
 	torch::TensorOptions options(torch::kByte);
@@ -190,6 +194,9 @@ RasterizeGaussiansCUDA(
 	std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
 	std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
 	
+	const int* metric_map_ptr = get_metric_count ? metric_map.contiguous().data_ptr<int>() : nullptr;
+	int* metric_count_ptr = get_metric_count ? metric_count.contiguous().data<int>() : nullptr;
+
 	int rendered = 0;
 	if(P != 0) {
 		int M = 0;
@@ -226,6 +233,8 @@ RasterizeGaussiansCUDA(
 			prefiltered,
 			argmax_depth,
 			inference,
+			get_metric_count,
+			metric_map_ptr,
 			out_color.contiguous().data<float>(),
 			out_opacity.contiguous().data<float>(),
 			out_depth.contiguous().data<float>(),
@@ -235,6 +244,7 @@ RasterizeGaussiansCUDA(
 			out_albedo.contiguous().data<float>(),
 			out_roughness.contiguous().data<float>(),
 			out_metallic.contiguous().data<float>(),
+			metric_count_ptr,
 			out_feature.contiguous().data<float>(),
 			radii.contiguous().data<int>(),
 			debug);
@@ -254,7 +264,8 @@ RasterizeGaussiansCUDA(
 		out_albedo,
 		out_roughness,
 		out_metallic,
-		out_feature
+		out_feature,
+		metric_count
 	);
 }
 
