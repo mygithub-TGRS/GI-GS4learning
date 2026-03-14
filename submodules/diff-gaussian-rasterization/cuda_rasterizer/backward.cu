@@ -724,15 +724,28 @@ SSRCUDA(
     kD.y *= 1.0 - metallic;
     kD.z *= 1.0 - metallic;
 
-    float sampleDelta = 0.0625 * M_PIf;
-    float nrSamples = 0.0; 
-    for(float phi = 0.0; phi < 2.0 * M_PIf; phi += sampleDelta)
-    {
-        for(float theta = 0.0; theta <= 0.5 * M_PIf; theta += sampleDelta * 0.5)
-        {
-        // spherical to cartesian (in tangent space)
-            float3 tangentSample = {sinf(theta) * cosf(phi),  sinf(theta) * sinf(phi), cosf(theta)};
-            tangentSample = normalize(tangentSample);
+	    float sampleDelta = 0.0625 * M_PIf;
+		const float theta_delta = sampleDelta * 0.5f;
+		const int phi_steps = max(1, (int)ceilf((2.0f * M_PIf) / sampleDelta));
+		const int theta_steps = max(1, (int)floorf((0.5f * M_PIf) / theta_delta) + 1);
+	    float nrSamples = 0.0;
+		for (int pi = 0; pi < phi_steps; ++pi)
+	    {
+			const float phi = pi * sampleDelta;
+			if (phi >= 2.0f * M_PIf)
+				break;
+			float sin_phi, cos_phi;
+			__sincosf(phi, &sin_phi, &cos_phi);
+			for (int ti = 0; ti < theta_steps; ++ti)
+	        {
+				const float theta = ti * theta_delta;
+				if (theta > 0.5f * M_PIf)
+					break;
+	        // spherical to cartesian (in tangent space)
+				float sin_theta, cos_theta;
+				__sincosf(theta, &sin_theta, &cos_theta);
+	            float3 tangentSample = {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
+	            tangentSample = normalize(tangentSample);
         // tangent space to view
             float3 sampleVec = transformVec3x3(tangentSample, TBN);
             float3 samplePos = {0.0f, 0.0f, 0.0f};
@@ -755,10 +768,10 @@ SSRCUDA(
 				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
 			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - 0.05)
 			    {
-					diffuse.x += rgb.x * cosf(theta) * sinf(theta);
-                    diffuse.y += rgb.y * cosf(theta) * sinf(theta);
-                    diffuse.z += rgb.z * cosf(theta) * sinf(theta);
-                    nrSamples++;
+					diffuse.x += rgb.x * cos_theta * sin_theta;
+	                    diffuse.y += rgb.y * cos_theta * sin_theta;
+	                    diffuse.z += rgb.z * cos_theta * sin_theta;
+	                    nrSamples++;
 				    break;
 			    }
 		    }
@@ -865,6 +878,13 @@ renderFeatureBackwardCUDA(
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+	constexpr int MAX_LOCAL_FEATURE_DIM = 32;
+	float dL_pixel_feat[MAX_LOCAL_FEATURE_DIM] = { 0.0f };
+	const bool cache_feature_grad = inside && feature_dim <= MAX_LOCAL_FEATURE_DIM;
+	if (cache_feature_grad) {
+		for (int feat_ch = 0; feat_ch < feature_dim; ++feat_ch)
+			dL_pixel_feat[feat_ch] = dL_dpixels_feature[feat_ch * H * W + pix_id];
+	}
 
 	float T = 1.0f;
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE) {
@@ -901,7 +921,8 @@ renderFeatureBackwardCUDA(
 			const int point_offset = collected_id[j] * feature_dim;
 			if (inside) {
 				for (int feat_ch = 0; feat_ch < feature_dim; ++feat_ch) {
-					const float dL_dpixel = dL_dpixels_feature[feat_ch * H * W + pix_id];
+					const float dL_dpixel = cache_feature_grad ? dL_pixel_feat[feat_ch]
+						: dL_dpixels_feature[feat_ch * H * W + pix_id];
 					atomicAdd(&(dL_dfeature[point_offset + feat_ch]), weight * dL_dpixel);
 				}
 			}

@@ -558,15 +558,6 @@ renderCUDA(
 				continue;
 			}
 
-			float3 view_dir = {
-				cam_pos[0] - means3D[collected_id[j] * 3 + 0],
-				cam_pos[1] - means3D[collected_id[j] * 3 + 1],
-				cam_pos[2] - means3D[collected_id[j] * 3 + 2],
-			};
-			const float NoV = normals[collected_id[j] * 3 + 0] * view_dir.x + \
-							  normals[collected_id[j] * 3 + 1] * view_dir.y + \
-							  normals[collected_id[j] * 3 + 2] * view_dir.z;
-
 			const float weight = alpha * T;
 			if (get_flag && metric_map != nullptr && metric_count != nullptr && metric_map[pix_id] == 1)
 				atomicAdd(&(metric_count[collected_id[j]]), 1);
@@ -687,23 +678,35 @@ SSAOCUDA(
 	TBN[6] = normal.x;
 	TBN[7] = normal.y;
 	TBN[8] = normal.z;
-	float occ = 0.0;
-	float sampleDelta = delta * M_PIf;
-    float nrSamples = 0.0; 
-    for(float phi = 0.0; phi < 2.0 * M_PIf; phi += sampleDelta)
+    float occ = 0.0;
+    float sampleDelta = delta * M_PIf;
+    const float theta_delta = sampleDelta * 0.5f;
+    const int phi_steps = max(1, (int)ceilf((2.0f * M_PIf) / sampleDelta));
+    const int theta_steps = max(1, (int)floorf((0.5f * M_PIf) / theta_delta) + 1);
+    float nrSamples = 0.0;
+    for (int pi = 0; pi < phi_steps; ++pi)
     {
-        for(float theta = 0.0; theta <= 0.5 * M_PIf; theta += sampleDelta * 0.5)
+        const float phi = pi * sampleDelta;
+        if (phi >= 2.0f * M_PIf)
+            break;
+        float sin_phi, cos_phi;
+        __sincosf(phi, &sin_phi, &cos_phi);
+        for (int ti = 0; ti < theta_steps; ++ti)
         {
-        // spherical to cartesian (in tangent space)
-			float cosh = cosf(theta);
-            float3 tangentSample = {sinf(theta) * cosf(phi),  sinf(theta) * sinf(phi), cosf(theta)};
+            const float theta = ti * theta_delta;
+            if (theta > 0.5f * M_PIf)
+                break;
+            // spherical to cartesian (in tangent space)
+            float sin_theta, cos_theta;
+            __sincosf(theta, &sin_theta, &cos_theta);
+            float3 tangentSample = {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
             tangentSample = normalize(tangentSample);
-        // tangent space to view
+            // tangent space to view
             float3 sampleVec = transformVec3x3(tangentSample, TBN);
             float3 samplePos = {0.0f, 0.0f, 0.0f};
-			nrSamples += cosh * sinf(theta);
-		    for(int j = start; j < step; ++j)
-		    {
+            nrSamples += cos_theta * sin_theta;
+            for (int j = start; j < step; ++j)
+            {
 			    samplePos.x = pos.x + sampleVec.x * j * (1 + pos.z / 100) * (1 + pos.z / 100 ) * radius / step; //100=zfar-znear
 			    samplePos.y = pos.y + sampleVec.y * j * (1 + pos.z / 100) * (1 + pos.z / 100)* radius / step; 
 			    samplePos.z = pos.z + sampleVec.z * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
@@ -720,12 +723,12 @@ SSAOCUDA(
 				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
 				
 
-			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - thick) 
-			    {
-				    occ += cosh * sinf(theta);
-				    break;
-			    }
-		    }
+                if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - thick)
+                {
+                    occ += cos_theta * sin_theta;
+                    break;
+                }
+            }
         }
     }
 	if(nrSamples > 0.0){
@@ -804,13 +807,26 @@ SSRCUDA(
     kD.z *= 1.0 - metallic;
 
     float sampleDelta = delta * M_PIf;
-    float nrSamples = 0.0; 
-    for(float phi = 0.0; phi < 2.0 * M_PIf; phi += sampleDelta)
+    const float theta_delta = sampleDelta * 0.5f;
+    const int phi_steps = max(1, (int)ceilf((2.0f * M_PIf) / sampleDelta));
+    const int theta_steps = max(1, (int)floorf((0.5f * M_PIf) / theta_delta) + 1);
+    float nrSamples = 0.0;
+    for (int pi = 0; pi < phi_steps; ++pi)
     {
-        for(float theta = 0.0; theta <= 0.5 * M_PIf; theta += sampleDelta * 0.5)
+        const float phi = pi * sampleDelta;
+        if (phi >= 2.0f * M_PIf)
+            break;
+        float sin_phi, cos_phi;
+        __sincosf(phi, &sin_phi, &cos_phi);
+        for (int ti = 0; ti < theta_steps; ++ti)
         {
+            const float theta = ti * theta_delta;
+            if (theta > 0.5f * M_PIf)
+                break;
         // spherical to cartesian (in tangent space)
-            float3 tangentSample = {sinf(theta) * cosf(phi),  sinf(theta) * sinf(phi), cosf(theta)};
+            float sin_theta, cos_theta;
+            __sincosf(theta, &sin_theta, &cos_theta);
+            float3 tangentSample = {sin_theta * cos_phi,  sin_theta * sin_phi, cos_theta};
             tangentSample = normalize(tangentSample);
         // tangent space to view
             float3 sampleVec = transformVec3x3(tangentSample, TBN);
@@ -835,9 +851,9 @@ SSRCUDA(
 				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
 			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - thick)  //0.05 0.1
 			    {
-				    diffuse.x += rgb.x * cosf(theta) * sinf(theta);
-                    diffuse.y += rgb.y * cosf(theta) * sinf(theta);
-                    diffuse.z += rgb.z * cosf(theta) * sinf(theta);
+				    diffuse.x += rgb.x * cos_theta * sin_theta;
+	                    diffuse.y += rgb.y * cos_theta * sin_theta;
+	                    diffuse.z += rgb.z * cos_theta * sin_theta;
                     // nrSamples++;
 				    break;
 			    }
@@ -991,21 +1007,24 @@ depthmapToNormalCUDA(
 	// normal_from_depth[2 * H * W + pix_id] = normal_z;
 	// filter out the edge to avoid the noise normal
 	int pad = 2;
+	float depth_aa = 0.0f, depth_bb = 0.0f, depth_cc = 0.0f, depth_dd = 0.0f;
+	float depth_ab = 0.0f, depth_bc = 0.0f, depth_cd = 0.0f, depth_da = 0.0f;
 	for (int x = -pad; x < pad + 1; ++x) {
 		if (int(pix.x + x) < 0 || int(pix.x + x) > W - 1) return;
 		for (int y = -pad; y < pad + 1; ++y) {
 			if (int(pix.y + y) < 0 || int(pix.y + y) > H - 1) return;
-			if (out_depth[pix_id + W * y + x] < depth_thresh) return;
+			const float d = out_depth[pix_id + W * y + x];
+			if (d < depth_thresh) return;
+			if (x == 0 && y == -1) depth_aa = d;
+			if (x == 1 && y == 0) depth_bb = d;
+			if (x == 0 && y == 1) depth_cc = d;
+			if (x == -1 && y == 0) depth_dd = d;
+			if (x == 1 && y == -1) depth_ab = d;
+			if (x == 1 && y == 1) depth_bc = d;
+			if (x == -1 && y == 1) depth_cd = d;
+			if (x == -1 && y == -1) depth_da = d;
 		}
 	}
-	float depth_aa = out_depth[pix_id - W];
-	float depth_bb = out_depth[pix_id + 1];
-	float depth_cc = out_depth[pix_id + W];
-	float depth_dd = out_depth[pix_id - 1];
-	float depth_ab = out_depth[pix_id - W + 1];
-	float depth_bc = out_depth[pix_id + W + 1];
-	float depth_cd = out_depth[pix_id + W - 1];
-	float depth_da = out_depth[pix_id - W - 1];
 
 	float3 pos_aa = get_position(pix.x, pix.y - 1, cx, cy, focal_x, focal_y, depth_aa);
 	float3 pos_bb = get_position(pix.x + 1, pix.y, cx, cy, focal_x, focal_y, depth_bb);
