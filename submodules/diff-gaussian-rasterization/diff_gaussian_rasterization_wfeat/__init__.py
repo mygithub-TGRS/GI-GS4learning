@@ -49,6 +49,7 @@ class GaussianRasterizationSettings(NamedTuple):
     debug: bool
     inference: bool
     argmax_depth: bool
+    get_flag: bool = False
 
 
 class _RasterizeGaussians(torch.autograd.Function):
@@ -69,6 +70,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         scales: torch.Tensor,
         rotations: torch.Tensor,
         cov3Ds_precomp: torch.Tensor,
+        metric_map: torch.Tensor,
+        metric_count: torch.Tensor,
         raster_settings: GaussianRasterizationSettings,
     ) -> Tuple[
         torch.Tensor,
@@ -110,6 +113,9 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.prefiltered,
             raster_settings.argmax_depth,
             raster_settings.inference,
+            metric_map,
+            metric_count,
+            raster_settings.get_flag,
             raster_settings.debug,
         )
 
@@ -208,6 +214,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         grad_out_normal_view: Optional[torch.Tensor] = None,
         grad_out_feature: Optional[torch.Tensor] = None
     ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
@@ -348,6 +356,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_rotations,
             grad_cov3Ds_precomp,
             None,
+            None,
+            None,
         )
 
         # print(grad_rotations.mean())
@@ -419,6 +429,8 @@ class GaussianRasterizer(nn.Module):
         scales: Optional[torch.Tensor] = None,
         rotations: Optional[torch.Tensor] = None,
         cov3D_precomp: Optional[torch.Tensor] = None,
+        metric_map: Optional[torch.Tensor] = None,
+        metric_count: Optional[torch.Tensor] = None,
         derive_normal: bool = True,
         return_feature: bool = False,
 
@@ -465,6 +477,10 @@ class GaussianRasterizer(nn.Module):
             rotations = torch.Tensor([])
         if cov3D_precomp is None:
             cov3D_precomp = torch.Tensor([])
+        if metric_map is None:
+            metric_map = torch.empty(0, dtype=torch.int32, device=means3D.device)
+        if metric_count is None:
+            metric_count = torch.empty(0, dtype=torch.int32, device=means3D.device)
 
         # Invoke C++/CUDA rasterization routine
         (
@@ -493,6 +509,8 @@ class GaussianRasterizer(nn.Module):
             scales,
             rotations,
             cov3D_precomp,
+            metric_map,
+            metric_count,
             raster_settings,
         )
         # torch.backends.cudnn.benchmark = True

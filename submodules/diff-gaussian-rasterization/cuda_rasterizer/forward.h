@@ -98,11 +98,14 @@ namespace FORWARD
 		float* out_normal,
 		float* out_normal_view,
 		float* out_pos,
-		float* out_albedo,
-		float* out_roughness,
-		float* out_metallic,
-		const bool argmax_depth,
-		const bool inference);
+			float* out_albedo,
+			float* out_roughness,
+			float* out_metallic,
+			const int* metric_map,
+			int* metric_count,
+			const bool get_flag,
+			const bool argmax_depth,
+			const bool inference);
 
 	void render_feature(
 		const dim3 grid, dim3 block,

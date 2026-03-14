@@ -55,6 +55,104 @@ __forceinline__ __device__ void getRect(const float2 p, const int max_radius, co
 	};
 }
 
+__forceinline__ __device__ float2 ellipseXRangeAtY(
+	const float4 con_o,
+	const float2 center,
+	const float t,
+	const float y)
+{
+	const float a = con_o.x;
+	const float b = con_o.y;
+	const float c = con_o.z;
+	const float dy = y - center.y;
+	const float quad = a * t + (b * b - a * c) * dy * dy;
+	if (quad <= 0.0f || a <= 0.0f)
+		return { center.x, center.x };
+	const float sqrt_q = sqrtf(quad);
+	const float x0 = center.x + (-b * dy - sqrt_q) / a;
+	const float x1 = center.x + (-b * dy + sqrt_q) / a;
+	return { min(x0, x1), max(x0, x1) };
+}
+
+__forceinline__ __device__ uint32_t duplicateToTilesTouched(
+	const float2 center,
+	const float4 con_o,
+	const dim3 grid,
+	const float mult,
+	const uint32_t gaussian_idx,
+	const uint32_t offset,
+	const float depth,
+	uint64_t* gaussian_keys,
+	uint32_t* gaussian_values)
+{
+	const float a = con_o.x;
+	const float b = con_o.y;
+	const float c = con_o.z;
+	const float det = a * c - b * b;
+	if (a <= 0.0f || c <= 0.0f || det <= 0.0f)
+		return 0;
+
+	const float opacity = con_o.w;
+	if (opacity <= (1.0f / 255.0f))
+		return 0;
+
+	float t = 2.0f * logf(opacity * 255.0f);
+	t = mult * t;
+	if (!(t > 0.0f))
+		return 0;
+
+	const float y_term = sqrtf(fmaxf(0.0f, (a * t) / det));
+	float y_min = center.y - y_term;
+	float y_max = center.y + y_term;
+
+	const int row_min = max(0, min((int)grid.y, (int)floorf(y_min / BLOCK_Y)));
+	const int row_max = max(0, min((int)grid.y, (int)floorf(y_max / BLOCK_Y) + 1));
+	if (row_min >= row_max)
+		return 0;
+
+	uint32_t written = 0;
+	for (int ty = row_min; ty < row_max; ++ty)
+	{
+		const float y0 = (float)(ty * BLOCK_Y);
+		const float y1 = y0 + BLOCK_Y;
+
+		const float2 xr0 = ellipseXRangeAtY(con_o, center, t, y0);
+		const float2 xr1 = ellipseXRangeAtY(con_o, center, t, y1);
+		float x_min = fminf(xr0.x, xr1.x);
+		float x_max = fmaxf(xr0.y, xr1.y);
+
+		if (y0 <= center.y && center.y < y1)
+		{
+			const float x_term = sqrtf(fmaxf(0.0f, (c * t) / det));
+			x_min = fminf(x_min, center.x - x_term);
+			x_max = fmaxf(x_max, center.x + x_term);
+		}
+
+		const int tx_min = max(0, min((int)grid.x, (int)floorf(x_min / BLOCK_X)));
+		const int tx_max = max(0, min((int)grid.x, (int)floorf(x_max / BLOCK_X) + 1));
+		if (tx_min >= tx_max)
+			continue;
+
+		if (gaussian_keys != nullptr)
+		{
+			for (int tx = tx_min; tx < tx_max; ++tx)
+			{
+				const uint32_t tile_id = ty * grid.x + tx;
+				uint64_t key = ((uint64_t)tile_id << 32) | *((uint32_t*)&depth);
+				gaussian_keys[offset + written] = key;
+				gaussian_values[offset + written] = gaussian_idx;
+				written++;
+			}
+		}
+		else
+		{
+			written += (tx_max - tx_min);
+		}
+	}
+
+	return written;
+}
+
 __forceinline__ __device__ float3 transformPoint4x3(const float3& p, const float* matrix)
 {
 	float3 transformed = {

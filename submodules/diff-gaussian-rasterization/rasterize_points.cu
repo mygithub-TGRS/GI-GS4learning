@@ -153,11 +153,14 @@ RasterizeGaussiansCUDA(
     const int image_height,
     const int image_width,
 	const int degree,
-	const bool prefiltered,
-	const bool argmax_depth,
-	const bool inference,
-	const bool debug
-) {
+		const bool prefiltered,
+		const bool argmax_depth,
+		const bool inference,
+		const torch::Tensor& metric_map,
+		torch::Tensor& metric_count,
+		const bool get_flag,
+		const bool debug
+	) {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
 		AT_ERROR("means3D must have dimensions (num_points, 3)");
 	}
@@ -197,7 +200,7 @@ RasterizeGaussiansCUDA(
 			M = sh.size(1);
 		}
 
-		rendered = CudaRasterizer::Rasterizer::forward(
+			rendered = CudaRasterizer::Rasterizer::forward(
 			geomFunc,
 			binningFunc,
 			imgFunc,
@@ -233,11 +236,14 @@ RasterizeGaussiansCUDA(
 			out_normal_view.contiguous().data<float>(),
 			out_pos.contiguous().data<float>(),
 			out_albedo.contiguous().data<float>(),
-			out_roughness.contiguous().data<float>(),
-			out_metallic.contiguous().data<float>(),
-			out_feature.contiguous().data<float>(),
-			radii.contiguous().data<int>(),
-			debug);
+				out_roughness.contiguous().data<float>(),
+				out_metallic.contiguous().data<float>(),
+				out_feature.contiguous().data<float>(),
+				(metric_map.numel() > 0) ? metric_map.contiguous().data<int>() : nullptr,
+				(metric_count.numel() > 0) ? metric_count.contiguous().data<int>() : nullptr,
+				get_flag,
+				radii.contiguous().data<int>(),
+				debug);
   	}
   	return std::make_tuple(
 		rendered,

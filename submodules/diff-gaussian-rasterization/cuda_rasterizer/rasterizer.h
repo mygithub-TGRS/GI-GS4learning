@@ -151,6 +151,9 @@ namespace CudaRasterizer
 			float* out_roughness,
 			float* out_metallic,
 			float* out_feature,
+			const int* metric_map,
+			int* metric_count,
+			const bool get_flag,
 			int* radii = nullptr,
 			bool debug = false);
 

@@ -16,6 +16,13 @@
 #include "ssr.h"
 namespace cg = cooperative_groups;
 
+__forceinline__ __device__ float warpReduceSum(float val, unsigned int mask)
+{
+	for (int offset = 16; offset > 0; offset >>= 1)
+		val += __shfl_down_sync(mask, val, offset);
+	return val;
+}
+
 // Backward pass for conversion of spherical harmonics to RGB for
 // each Gaussian.
 __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, const bool* clamped, const glm::vec3* dL_dcolor, glm::vec3* dL_dmeans, glm::vec3* dL_dshs)
@@ -472,25 +479,29 @@ renderCUDA(
 
 	float accum_opacity = 0.0f;
 	float accum_rec[C] = { 0.0f };
-	float dL_dpixel[C];
-	float dL_dpixel_opacity;
+	float dL_dpixel[C] = { 0.0f };
+	float dL_dpixel_opacity = 0.0f;
 	// NOTE: PBR
-	float dL_dpixel_normal[C];
-	float dL_dpixel_albedo[C];
-	float dL_dpixel_roughness;
-	float dL_dpixel_metallic;
-	float dL_dpixel_depth;
+	float dL_dpixel_normal[C] = { 0.0f };
+	float dL_dpixel_albedo[C] = { 0.0f };
+	float dL_dpixel_roughness = 0.0f;
+	float dL_dpixel_metallic = 0.0f;
+	float dL_dpixel_depth = 0.0f;
 	if (inside) {
 		for (int i = 0; i < C; i++) {
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
 			dL_dpixel_normal[i] = dL_dpixels_normal[i * H * W + pix_id];
 			dL_dpixel_albedo[i] = dL_dpixels_albedo[i * H * W + pix_id];
 		}
-		dL_dpixel_opacity = dL_dpixels_opacity[pix_id];
-		dL_dpixel_roughness = dL_dpixels_roughness[pix_id];
-		dL_dpixel_metallic = dL_dpixels_metallic[pix_id];
-		dL_dpixel_depth = dL_dpixels_depth[pix_id];
-	}
+			dL_dpixel_opacity = dL_dpixels_opacity[pix_id];
+			dL_dpixel_roughness = dL_dpixels_roughness[pix_id];
+			dL_dpixel_metallic = dL_dpixels_metallic[pix_id];
+			dL_dpixel_depth = dL_dpixels_depth[pix_id];
+		}
+		float bg_dot_dpixel = 0.0f;
+		for (int i = 0; i < C; i++) {
+			bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
+		}
 	float last_color[C] = { 0.0f };
 	
 	// Skip the edge normal
@@ -549,45 +560,36 @@ renderCUDA(
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;
 
-			float3 view_dir = {
-				cam_pos[0] - means3D[collected_id[j] * 3 + 0],
-				cam_pos[1] - means3D[collected_id[j] * 3 + 1],
-				cam_pos[2] - means3D[collected_id[j] * 3 + 2],
-			};
-			const float NoV = normals[collected_id[j] * 3 + 0] * view_dir.x + \
-							  normals[collected_id[j] * 3 + 1] * view_dir.y + \
-							  normals[collected_id[j] * 3 + 2] * view_dir.z;
-
-			// Propagate gradients to per-Gaussian colors and keep
-			// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
-			// pair).
-			float dL_dalpha = 0.0f;
-			const int global_id = collected_id[j];
-			for (int ch = 0; ch < C; ch++)
-			{
-				const float c = collected_colors[ch * BLOCK_SIZE + j];
+				// Propagate gradients to per-Gaussian colors and keep
+				// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
+				// pair).
+				float dL_dalpha = 0.0f;
+				const int global_id = collected_id[j];
+				float dcolor_local[C] = { 0.0f };
+				float dnormal_local[C] = { 0.0f };
+				float dalbedo_local[C] = { 0.0f };
+				for (int ch = 0; ch < C; ch++)
+				{
+					const float c = collected_colors[ch * BLOCK_SIZE + j];
 				// Update last color (to be used in the next iteration)
 				accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
 				last_color[ch] = c;
 
-				const float dL_dchannel = dL_dpixel[ch];
-				dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
-				// Update the gradients w.r.t. color of the Gaussian. 
-				// Atomic, since this pixel is just one of potentially
-				// many that were affected by this Gaussian.
-				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
+					const float dL_dchannel = dL_dpixel[ch];
+					dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
+					dcolor_local[ch] = dchannel_dcolor * dL_dchannel;
 
 				// NOTE: PBR (do not contribute to the alpha/opacity)
                 //if (NoV > 0.0f) { // NOTE: the trick from GIR, do not make scene for scenes
 					const float dL_dchannel_normal = dL_dpixel_normal[ch];
-					atomicAdd(&(dL_dnormals[global_id * C + ch]), dchannel_dcolor * dL_dchannel_normal);
+					dnormal_local[ch] = dchannel_dcolor * dL_dchannel_normal;
 				//}
-				const float dL_dchannel_albedo = dL_dpixel_albedo[ch];
-				atomicAdd(&(dL_dalbedo[global_id * C + ch]), dchannel_dcolor * dL_dchannel_albedo);
-			}
-			atomicAdd(&(dL_droughness[global_id]), dchannel_dcolor * dL_dpixel_roughness);
-			atomicAdd(&(dL_dmetallic[global_id]), dchannel_dcolor * dL_dpixel_metallic);
-			atomicAdd(&(dL_depth[global_id]), dchannel_dcolor * dL_dpixel_depth);
+					const float dL_dchannel_albedo = dL_dpixel_albedo[ch];
+					dalbedo_local[ch] = dchannel_dcolor * dL_dchannel_albedo;
+				}
+				float droughness_local = dchannel_dcolor * dL_dpixel_roughness;
+				float dmetallic_local = dchannel_dcolor * dL_dpixel_metallic;
+				float ddepth_local = dchannel_dcolor * dL_dpixel_depth;
 
 			// NOTE: for opacity
 			accum_opacity = last_alpha + (1.f - last_alpha) * accum_opacity;
@@ -599,11 +601,7 @@ renderCUDA(
 
 			// Account for fact that alpha also influences how much of
 			// the background color is added if nothing left to blend
-			float bg_dot_dpixel = 0;
-			for (int i = 0; i < C; i++) {
-				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
-			}
-			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
+				dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
 
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
@@ -612,22 +610,54 @@ renderCUDA(
 			const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
 			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
 
-			// Update gradients w.r.t. 2D mean position of the Gaussian
-			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
-			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
-			const float abs_dL_dmean2D = abs(dL_dG * dG_ddelx * ddelx_dx) + abs(dL_dG * dG_ddely * ddely_dy);
-            atomicAdd(&dL_dmean2D[global_id].z, abs_dL_dmean2D);
+				const float dmean_x_local = dL_dG * dG_ddelx * ddelx_dx;
+				const float dmean_y_local = dL_dG * dG_ddely * ddely_dy;
+				const float dmean_z_local = abs(dmean_x_local) + abs(dmean_y_local);
+				const float dconic_x_local = -0.5f * gdx * d.x * dL_dG;
+				const float dconic_y_local = -0.5f * gdx * d.y * dL_dG;
+				const float dconic_w_local = -0.5f * gdy * d.y * dL_dG;
+				const float dopacity_local = G * dL_dalpha;
 
-			// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
-			atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
+				const unsigned int warp_mask = __activemask();
+				const int lane_id = block.thread_rank() & 31;
 
-			// Update gradients w.r.t. opacity of the Gaussian
-			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+				for (int ch = 0; ch < C; ch++) {
+					const float dcolor_sum = warpReduceSum(dcolor_local[ch], warp_mask);
+					const float dnormal_sum = warpReduceSum(dnormal_local[ch], warp_mask);
+					const float dalbedo_sum = warpReduceSum(dalbedo_local[ch], warp_mask);
+					if (lane_id == 0) {
+						atomicAdd(&(dL_dcolors[global_id * C + ch]), dcolor_sum);
+						atomicAdd(&(dL_dnormals[global_id * C + ch]), dnormal_sum);
+						atomicAdd(&(dL_dalbedo[global_id * C + ch]), dalbedo_sum);
+					}
+				}
+
+				const float droughness_sum = warpReduceSum(droughness_local, warp_mask);
+				const float dmetallic_sum = warpReduceSum(dmetallic_local, warp_mask);
+				const float ddepth_sum = warpReduceSum(ddepth_local, warp_mask);
+				const float dmean_x_sum = warpReduceSum(dmean_x_local, warp_mask);
+				const float dmean_y_sum = warpReduceSum(dmean_y_local, warp_mask);
+				const float dmean_z_sum = warpReduceSum(dmean_z_local, warp_mask);
+				const float dconic_x_sum = warpReduceSum(dconic_x_local, warp_mask);
+				const float dconic_y_sum = warpReduceSum(dconic_y_local, warp_mask);
+				const float dconic_w_sum = warpReduceSum(dconic_w_local, warp_mask);
+				const float dopacity_sum = warpReduceSum(dopacity_local, warp_mask);
+
+				if (lane_id == 0) {
+					atomicAdd(&(dL_droughness[global_id]), droughness_sum);
+					atomicAdd(&(dL_dmetallic[global_id]), dmetallic_sum);
+					atomicAdd(&(dL_depth[global_id]), ddepth_sum);
+					atomicAdd(&dL_dmean2D[global_id].x, dmean_x_sum);
+					atomicAdd(&dL_dmean2D[global_id].y, dmean_y_sum);
+					atomicAdd(&dL_dmean2D[global_id].z, dmean_z_sum);
+					atomicAdd(&dL_dconic2D[global_id].x, dconic_x_sum);
+					atomicAdd(&dL_dconic2D[global_id].y, dconic_y_sum);
+					atomicAdd(&dL_dconic2D[global_id].w, dconic_w_sum);
+					atomicAdd(&(dL_dopacity[global_id]), dopacity_sum);
+				}
+			}
 		}
 	}
-}
 
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 SSRCUDA(

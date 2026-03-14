@@ -49,6 +49,7 @@ class GaussianRasterizationSettings(NamedTuple):
     debug: bool
     inference: bool
     argmax_depth: bool
+    get_flag: bool = False
 
 
 class _RasterizeGaussians(torch.autograd.Function):
@@ -110,6 +111,9 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.prefiltered,
             raster_settings.argmax_depth,
             raster_settings.inference,
+            torch.empty(0, dtype=torch.int32, device=means3D.device),
+            torch.empty(0, dtype=torch.int32, device=means3D.device),
+            raster_settings.get_flag,
             raster_settings.debug,
         )
 

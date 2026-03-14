@@ -243,10 +243,19 @@ __global__ void preprocessCUDA(
 	const float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
 	const float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	const float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
-	uint2 rect_min, rect_max;
-	// Get the covered tile range by the point tile ids stored in `rect_min` and `rect_max`
-	getRect(point_image, my_radius, grid, rect_min, rect_max);
-	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
+	const float4 con_o = { conic.x, conic.y, conic.z, opacities[idx] };
+	constexpr float kTileCullMult = 1.0f;
+	const uint32_t tiles_count = duplicateToTilesTouched(
+		point_image,
+		con_o,
+		grid,
+		kTileCullMult,
+		0,
+		0,
+		0.0f,
+		nullptr,
+		nullptr);
+	if (tiles_count == 0)
 		return;
 
 	// If colors have been precomputed, use them, otherwise convert
@@ -270,9 +279,9 @@ __global__ void preprocessCUDA(
 	radii[idx] = my_radius;
 	points_xy_image[idx] = point_image;
 	// Inverse 2D covariance and opacity neatly pack into one float4
-	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] };
+	conic_opacity[idx] = con_o;
 	pos_view[idx] = {p_view.x, p_view.y, p_view.z};
-	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);	// The number of covered tiles
+	tiles_touched[idx] = tiles_count;	// The number of covered tiles
 }
 
 
@@ -451,6 +460,9 @@ renderCUDA(
 	float* __restrict__ out_albedo,
 	float* __restrict__ out_roughness,
 	float* __restrict__ out_metallic,
+	const int* __restrict__ metric_map,
+	int* __restrict__ metric_count,
+	bool get_flag,
 	bool argmax_depth,
 	bool inference)
 {
@@ -556,6 +568,8 @@ renderCUDA(
 							  normals[collected_id[j] * 3 + 2] * view_dir.z;
 
 			const float weight = alpha * T;
+			if (get_flag && metric_map != nullptr && metric_count != nullptr && metric_map[pix_id] == 1)
+				atomicAdd(&(metric_count[collected_id[j]]), 1);
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++) {
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * weight;
@@ -1195,6 +1209,9 @@ void FORWARD::render(
 	float* out_albedo,
 	float* out_roughness,
 	float* out_metallic,
+	const int* metric_map,
+	int* metric_count,
+	const bool get_flag,
 	const bool argmax_depth,
 	const bool inference)
 {
@@ -1227,6 +1244,9 @@ void FORWARD::render(
 		out_albedo,
 		out_roughness,
 		out_metallic,
+		metric_map,
+		metric_count,
+		get_flag,
 		argmax_depth,
 		inference);
 }
@@ -1385,4 +1405,3 @@ void FORWARD::SSR(
 		abd
 	);
 }
-

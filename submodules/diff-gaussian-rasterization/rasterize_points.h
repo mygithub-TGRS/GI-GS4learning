@@ -63,10 +63,13 @@ RasterizeGaussiansCUDA(
     const int image_height,
     const int image_width,
 	const int degree,
-	const bool prefiltered,
-	const bool argmax_depth,
-	const bool inference,
-	const bool debug);
+		const bool prefiltered,
+		const bool argmax_depth,
+		const bool inference,
+		const torch::Tensor& metric_map,
+		torch::Tensor& metric_count,
+		const bool get_flag,
+		const bool debug);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
 	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
