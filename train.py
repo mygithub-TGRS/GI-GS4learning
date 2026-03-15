@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
 from tqdm import tqdm, trange
-from diff_gaussian_rasterization import Gaussian_SSR
+from diff_gaussian_rasterization_wfeat import Gaussian_SSR
 import gc
 from lpips import LPIPS
 

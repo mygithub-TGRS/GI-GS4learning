@@ -12,7 +12,7 @@ import torchvision
 from PIL import Image
 from tqdm import tqdm
 from typing import Dict, Optional, Union
-from diff_gaussian_rasterization import Gaussian_SSR
+from diff_gaussian_rasterization_wfeat import Gaussian_SSR
 import math
 import json
 
