@@ -246,7 +246,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             imgBuffer,
         ) = ctx.saved_tensors
 
-       
+
 
 
         # Restructure args as C++ method expects them
@@ -287,7 +287,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.debug,
         )
 
-        
+
 
         # print(grad_out_normal.mean())
 
@@ -331,7 +331,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 grad_rotations,
             ) = _C.rasterize_gaussians_backward(*args)
 
-        
+
         grads = (
             grad_means3D,
             grad_means2D,
@@ -437,7 +437,7 @@ class GaussianRasterizer(nn.Module):
         torch.Tensor
     ]:
         raster_settings = self.raster_settings
-        
+
 
         if (shs is None and colors_precomp is None) or (
             shs is not None and colors_precomp is not None
@@ -511,7 +511,7 @@ class GaussianRasterizer(nn.Module):
         else:
             normal_from_depth = torch.zeros_like(out_normal)
             depth_pos = torch.zeros_like(out_normal)
-        
+
         normal_from_depth = kornia.filters.bilateral_blur(normal_from_depth[None, ...], (3, 3), 1, (3, 3))[0]
 
         # if derive_occlusion:
@@ -562,9 +562,9 @@ class GaussianRasterizer(nn.Module):
         if return_feature:
             outputs = outputs + (feature_map,)
         return outputs
-    
 
-    
+
+
 class _SSR(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -585,11 +585,12 @@ class _SSR(torch.autograd.Function):
         albedo,
         roughness,
         metallic,
-        F0
+        F0,
+        backward_mode
     ) -> Tuple[
         torch.Tensor,
         torch.Tensor,
-        
+
 
     ]:
         # Restructure arguments the way that the C++ lib expects them
@@ -621,6 +622,7 @@ class _SSR(torch.autograd.Function):
         ctx.image_height = image_height
         ctx.focal_x = focal_x
         ctx.focal_y = focal_y
+        ctx.backward_mode = backward_mode
         ctx.save_for_backward(
             normal,
             pos,
@@ -632,7 +634,7 @@ class _SSR(torch.autograd.Function):
             abd
         )
         return (color, abd)
-        
+
     @staticmethod
     def backward(
         ctx,
@@ -656,6 +658,7 @@ class _SSR(torch.autograd.Function):
         torch.Tensor,
         torch.Tensor,
         None,
+        None,
     ]:
         # Restore necessary values from context
         (
@@ -672,6 +675,7 @@ class _SSR(torch.autograd.Function):
         image_height = ctx.image_height
         focal_x = ctx.focal_x
         focal_y = ctx.focal_y
+        backward_mode = ctx.backward_mode
 
         # Restructure args as C++ method expects them
         args = (
@@ -689,15 +693,16 @@ class _SSR(torch.autograd.Function):
             grad_out_color
         )
 
-        # Compute gradients for relevant tensors by invoking backward method
-        # (
-        #     grad_albedo,
-        #     grad_roughness,
-        #     grad_metallic
-        # ) = _C.SSR_BACKWARD(*args)
-        grad_albedo = grad_out_color * abd
-        grad_roughness = torch.zeros_like(roughness)
-        grad_metallic = torch.zeros_like(metallic)
+        if backward_mode == "full_backward":
+            (
+                grad_albedo,
+                grad_roughness,
+                grad_metallic
+            ) = _C.SSR_BACKWARD(*args)
+        else:
+            grad_albedo = grad_out_color * abd
+            grad_roughness = torch.zeros_like(roughness)
+            grad_metallic = torch.zeros_like(metallic)
         grads = (
             None,
             None,
@@ -716,12 +721,13 @@ class _SSR(torch.autograd.Function):
             grad_roughness,
             grad_metallic,
             None,
+            None,
         )
 
         return grads
 
 class Gaussian_SSR(nn.Module):
-    def __init__(self, tanfovx, tanfovy, image_width, image_height, radius, bias, thick, delta, step, start):
+    def __init__(self, tanfovx, tanfovy, image_width, image_height, radius, bias, thick, delta, step, start, backward_mode: str = "fast_backward"):
         super().__init__()
         self.tanfovx = tanfovx
         self.tanfovy = tanfovy
@@ -733,7 +739,10 @@ class Gaussian_SSR(nn.Module):
         self.delta = delta
         self.step = step
         self.start = start
-    
+        if backward_mode not in ("fast_backward", "full_backward"):
+            raise ValueError(f"Invalid backward_mode '{backward_mode}'. Expected 'fast_backward' or 'full_backward'.")
+        self.backward_mode = backward_mode
+
     def forward(
         self,
         normal: torch.Tensor,
@@ -744,9 +753,9 @@ class Gaussian_SSR(nn.Module):
         metallic: torch.Tensor,
         F0: torch.Tensor,
     ) -> torch.Tensor:
-        
+
         focal_x = self.image_width / (2.0 * self.tanfovx)
-        focal_y = self.image_height / (2.0 * self.tanfovy)    
+        focal_y = self.image_height / (2.0 * self.tanfovy)
         (color, abd) = _SSR.apply(
                 self.image_width,
                 self.image_height,
@@ -764,8 +773,9 @@ class Gaussian_SSR(nn.Module):
                 albedo,
                 roughness,
                 metallic,
-                F0
+                F0,
+                self.backward_mode
             )
-        
+
         return (color, abd)
-    
+

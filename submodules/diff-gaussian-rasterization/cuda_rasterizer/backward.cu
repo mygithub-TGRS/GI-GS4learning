@@ -3,7 +3,7 @@
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
  * All rights reserved.
  *
- * This software is free for non-commercial, research and evaluation use 
+ * This software is free for non-commercial, research and evaluation use
  * under the terms of the LICENSE.md file.
  *
  * For inquiries contact  george.drettakis@inria.fr
@@ -133,14 +133,14 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::
 	// Account for normalization of direction
 	float3 dL_dmean = dnormvdv(float3{ dir_orig.x, dir_orig.y, dir_orig.z }, float3{ dL_ddir.x, dL_ddir.y, dL_ddir.z });
 
-	// Gradients of loss w.r.t. Gaussian means, but only the portion 
+	// Gradients of loss w.r.t. Gaussian means, but only the portion
 	// that is caused because the mean affects the view-dependent color.
 	// Additional mean gradient is accumulated in below methods.
 	dL_dmeans[idx] += glm::vec3(dL_dmean.x, dL_dmean.y, dL_dmean.z);
 }
 
 // Backward version of INVERSE 2D covariance matrix computation
-// (due to length launched as separate kernel before other 
+// (due to length launched as separate kernel before other
 // backward steps contained in preprocess)
 __global__ void computeCov2DCUDA(int P,
 	const float3* means,
@@ -161,19 +161,19 @@ __global__ void computeCov2DCUDA(int P,
 	// Reading location of 3D covariance for this Gaussian
 	const float* cov3D = cov3Ds + 6 * idx;
 
-	// Fetch gradients, recompute 2D covariance and relevant 
+	// Fetch gradients, recompute 2D covariance and relevant
 	// intermediate forward results needed in the backward.
 	float3 mean = means[idx];
 	float3 dL_dconic = { dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3] };
 	float3 t = transformPoint4x3(mean, view_matrix);
-	
+
 	const float limx = 1.3f * tan_fovx;
 	const float limy = 1.3f * tan_fovy;
 	const float txtz = t.x / t.z;
 	const float tytz = t.y / t.z;
 	t.x = min(limx, max(-limx, txtz)) * t.z;
 	t.y = min(limy, max(-limy, tytz)) * t.z;
-	
+
 	const float x_grad_mul = txtz < -limx || txtz > limx ? 0 : 1;
 	const float y_grad_mul = tytz < -limy || tytz > limy ? 0 : 1;
 
@@ -213,14 +213,14 @@ __global__ void computeCov2DCUDA(int P,
 		dL_dc = denom2inv * (-a * a * dL_dconic.z + 2 * a * b * dL_dconic.y + (denom - a * c) * dL_dconic.x);
 		dL_db = denom2inv * 2 * (b * c * dL_dconic.x - (denom + 2 * b * b) * dL_dconic.y + a * b * dL_dconic.z);
 
-		// Gradients of loss L w.r.t. each 3D covariance matrix (Vrk) entry, 
+		// Gradients of loss L w.r.t. each 3D covariance matrix (Vrk) entry,
 		// given gradients w.r.t. 2D covariance matrix (diagonal).
 		// cov2D = transpose(T) * transpose(Vrk) * T;
 		dL_dcov[6 * idx + 0] = (T[0][0] * T[0][0] * dL_da + T[0][0] * T[1][0] * dL_db + T[1][0] * T[1][0] * dL_dc);
 		dL_dcov[6 * idx + 3] = (T[0][1] * T[0][1] * dL_da + T[0][1] * T[1][1] * dL_db + T[1][1] * T[1][1] * dL_dc);
 		dL_dcov[6 * idx + 5] = (T[0][2] * T[0][2] * dL_da + T[0][2] * T[1][2] * dL_db + T[1][2] * T[1][2] * dL_dc);
 
-		// Gradients of loss L w.r.t. each 3D covariance matrix (Vrk) entry, 
+		// Gradients of loss L w.r.t. each 3D covariance matrix (Vrk) entry,
 		// given gradients w.r.t. 2D covariance matrix (off-diagonal).
 		// Off-diagonal elements appear twice --> double the gradient.
 		// cov2D = transpose(T) * transpose(Vrk) * T;
@@ -272,14 +272,14 @@ __global__ void computeCov2DCUDA(int P,
 	dL_dmean.y += view_matrix[6]*dL_depth[idx];
 	dL_dmean.z += view_matrix[10]*dL_depth[idx];
 
-	// Gradients of loss w.r.t. Gaussian means, but only the portion 
+	// Gradients of loss w.r.t. Gaussian means, but only the portion
 	// that is caused because the mean affects the covariance matrix.
 	// Additional mean gradient is accumulated in BACKWARD::preprocess.
 	dL_dmeans[idx] = dL_dmean;
 }
 
-// Backward pass for the conversion of scale and rotation to a 
-// 3D covariance matrix for each Gaussian. 
+// Backward pass for the conversion of scale and rotation to a
+// 3D covariance matrix for each Gaussian.
 __device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, const glm::vec4 rot, const float* dL_dcov3Ds, glm::vec3* dL_dscales, glm::vec4* dL_drots)
 {
 	// Recompute (intermediate) results for the 3D covariance computation.
@@ -459,7 +459,7 @@ renderCUDA(
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 
 	// In the forward, we stored the final value for T, the
-	// product of all (1 - alpha) factors. 
+	// product of all (1 - alpha) factors.
 	const float T_final = inside ? final_Ts[pix_id] : 0;
 	float T = T_final;
 
@@ -492,7 +492,7 @@ renderCUDA(
 		dL_dpixel_depth = dL_dpixels_depth[pix_id];
 	}
 	float last_color[C] = { 0.0f };
-	
+
 	// Skip the edge normal
 	if (pix.x == 0 || pix.x == W - 1 || pix.y == 0 || pix.y == H - 1) {
 		for (int i = 0; i < C; i++) {
@@ -500,7 +500,7 @@ renderCUDA(
 		}
 	}
 
-	// Gradient of pixel coordinate w.r.t. normalized 
+	// Gradient of pixel coordinate w.r.t. normalized
 	// screen-space viewport corrdinates (-1 to 1)
 	const float ddelx_dx = 0.5 * W;
 	const float ddely_dy = 0.5 * H;
@@ -508,9 +508,12 @@ renderCUDA(
 	// Traverse all Gaussians
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
 	{
+		int num_done = __syncthreads_count(done);
+		if (num_done == BLOCK_SIZE)
+			break;
+
 		// Load auxiliary data into shared memory, start in the BACK
 		// and load them in revers order.
-		block.sync();
 		const int progress = i * BLOCK_SIZE + block.thread_rank();
 		if (range.x + progress < range.y)
 		{
@@ -572,7 +575,7 @@ renderCUDA(
 
 				const float dL_dchannel = dL_dpixel[ch];
 				dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
-				// Update the gradients w.r.t. color of the Gaussian. 
+				// Update the gradients w.r.t. color of the Gaussian.
 				// Atomic, since this pixel is just one of potentially
 				// many that were affected by this Gaussian.
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
@@ -659,13 +662,13 @@ SSRCUDA(
 	const float bias = -0.01;
 	int step = 16;
 
-    float3 diffuse = {0.0f, 0.0f, 0.0f}; 
-    float3 specular = {0.0f, 0.0f, 0.0f};                                                                                                 
+    float3 diffuse = {0.0f, 0.0f, 0.0f};
+    float3 specular = {0.0f, 0.0f, 0.0f};
 	float3 normal_un = {out_normal[pix_id], out_normal[1 * H * W + pix_id], out_normal[2 * H * W + pix_id]};
 	float3 normal = normalize(normal_un);
     float3 N = normal;
     float3 up = {0.0f, 1.0f, 0.0f};
-    float rndot = dot(up, normal); 
+    float rndot = dot(up, normal);
 	float3 untangent = {up.x - normal.x * rndot, up.y - normal.y * rndot, up.z - normal.z * rndot};
 	float3 tangent = normalize(untangent);
 	float3 bitangent = cross(normal, tangent);
@@ -694,24 +697,42 @@ SSRCUDA(
     kD.y *= 1.0 - metallic;
     kD.z *= 1.0 - metallic;
 
-    float sampleDelta = 0.0625 * M_PIf;
-    float nrSamples = 0.0; 
-    for(float phi = 0.0; phi < 2.0 * M_PIf; phi += sampleDelta)
+	float sampleDelta = 0.0625 * M_PIf;
+    const float thetaDelta = sampleDelta * 0.5f;
+    const int phiSteps = max(1, __float2int_ru((2.0f * M_PIf) / sampleDelta));
+    const int thetaSteps = max(1, __float2int_ru((0.5f * M_PIf) / thetaDelta)) + 1;
+    const float cx = float(W) * 0.5f;
+    const float cy = float(H) * 0.5f;
+    const float depthScale = 1.0f + pos.z * 0.01f;
+    const float stepScale = depthScale * depthScale * radius / step;
+    float nrSamples = 0.0;
+    for(int pi = 0; pi < phiSteps; ++pi)
     {
-        for(float theta = 0.0; theta <= 0.5 * M_PIf; theta += sampleDelta * 0.5)
+        const float phi = pi * sampleDelta;
+        float sinPhi = 0.0f;
+        float cosPhi = 0.0f;
+        sincosf(phi, &sinPhi, &cosPhi);
+        for(int ti = 0; ti < thetaSteps; ++ti)
         {
+            const float theta = ti * thetaDelta;
         // spherical to cartesian (in tangent space)
-            float3 tangentSample = {sinf(theta) * cosf(phi),  sinf(theta) * sinf(phi), cosf(theta)};
+            float sinTheta = 0.0f;
+            float cosTheta = 0.0f;
+            sincosf(theta, &sinTheta, &cosTheta);
+            const float sampleWeight = cosTheta * sinTheta;
+            float3 tangentSample = {sinTheta * cosPhi, sinTheta * sinPhi, cosTheta};
             tangentSample = normalize(tangentSample);
         // tangent space to view
             float3 sampleVec = transformVec3x3(tangentSample, TBN);
-            float3 samplePos = {0.0f, 0.0f, 0.0f};
+			const float3 rayStep = {sampleVec.x * stepScale, sampleVec.y * stepScale, sampleVec.z * stepScale};
+            float3 samplePos = {pos.x + rayStep.x * 8.0f, pos.y + rayStep.y * 8.0f, pos.z + rayStep.z * 8.0f};
 		    for(int j = 8; j < step; ++j)
 		    {
-			    samplePos.x = pos.x + sampleVec.x * j * (1 + pos.z / 100) * (1 + pos.z / 100 ) * radius / step; 
-			    samplePos.y = pos.y + sampleVec.y * j * (1 + pos.z / 100) * (1 + pos.z / 100)* radius / step; 
-			    samplePos.z = pos.z + sampleVec.z * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
-			    float cx = float(W) / 2.0f, cy = float(H) / 2.0f;
+				if (j > 8) {
+					samplePos.x += rayStep.x;
+					samplePos.y += rayStep.y;
+					samplePos.z += rayStep.z;
+				}
 			    int2 depth_id = get_coord(cx, cy, focal_x, focal_y, samplePos);
 			    if (depth_id.x < 0)
 				    break;
@@ -721,13 +742,13 @@ SSRCUDA(
 				    break;
 			    else if (depth_id.y > H - 1)
 				    break;
-			    float3 rgb = {out_rgb[W * depth_id.y + depth_id.x], out_rgb[H * W + W * depth_id.y + depth_id.x], out_rgb[2 * H * W + W * depth_id.y + depth_id.x]}; 
-				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
+			    float3 rgb = {out_rgb[W * depth_id.y + depth_id.x], out_rgb[H * W + W * depth_id.y + depth_id.x], out_rgb[2 * H * W + W * depth_id.y + depth_id.x]};
+				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x];
 			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - 0.05)
 			    {
-					diffuse.x += rgb.x * cosf(theta) * sinf(theta);
-                    diffuse.y += rgb.y * cosf(theta) * sinf(theta);
-                    diffuse.z += rgb.z * cosf(theta) * sinf(theta);
+					diffuse.x += rgb.x * sampleWeight;
+                    diffuse.y += rgb.y * sampleWeight;
+                    diffuse.z += rgb.z * sampleWeight;
                     nrSamples++;
 				    break;
 			    }
@@ -744,9 +765,9 @@ SSRCUDA(
 		diffuse.y = 0.0;
     	diffuse.z = 0.0;
 	}
-   
-	// nrSamples = 0.0; 
-    // const uint SAMPLE_COUNT = 64;      
+
+	// nrSamples = 0.0;
+    // const uint SAMPLE_COUNT = 64;
     // for(uint i = 0u; i < SAMPLE_COUNT; ++i)
     // {
     //     float3 samplePos = {0.0f, 0.0f, 0.0f};
@@ -758,9 +779,9 @@ SSRCUDA(
     //     {
     //         for(int j = 4; j < step; ++j)
 	// 	    {
-	// 		    samplePos.x = pos.x + L.x * j * (1 + pos.z / 100) * (1 + pos.z / 100 ) * radius / step; 
-	// 		    samplePos.y = pos.y + L.y * j * (1 + pos.z / 100) * (1 + pos.z / 100)* radius / step; 
-	// 		    samplePos.z = pos.z + L.z * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
+	// 		    samplePos.x = pos.x + L.x * j * (1 + pos.z / 100) * (1 + pos.z / 100 ) * radius / step;
+	// 		    samplePos.y = pos.y + L.y * j * (1 + pos.z / 100) * (1 + pos.z / 100)* radius / step;
+	// 		    samplePos.z = pos.z + L.z * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step;
 	// 		    float cx = float(W) / 2.0f, cy = float(H) / 2.0f;
 	// 		    int2 depth_id = get_coord(cx, cy, focal_x, focal_y, samplePos);
 	// 		    if (depth_id.x < 0)
@@ -771,21 +792,21 @@ SSRCUDA(
 	// 			    break;
 	// 		    else if (depth_id.y > H - 1)
 	// 			    break;
-	// 		    float3 rgb = {out_rgb[W * depth_id.y + depth_id.x], out_rgb[H * W + W * depth_id.y + depth_id.x], out_rgb[2 * H * W + W * depth_id.y + depth_id.x]}; 
-	// 			float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
+	// 		    float3 rgb = {out_rgb[W * depth_id.y + depth_id.x], out_rgb[H * W + W * depth_id.y + depth_id.x], out_rgb[2 * H * W + W * depth_id.y + depth_id.x]};
+	// 			float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x];
 	// 		    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - 0.15)
 	// 		    {
-				    
+
     //                 float attenuation = 1.0 / ((samplePos.x-pos.x)*(samplePos.x-pos.x)+(samplePos.y-pos.y)*(samplePos.y-pos.y)+(samplePos.z-pos.z)*(samplePos.z-pos.z)+0.0001);
     //                 float3 radiance = {rgb.x * attenuation, rgb.y * attenuation, rgb.z * attenuation};
-    //                 float NDF = DistributionGGX(N, Half, roughness);        
-    //                 float G = GeometrySmith(N, V, L, roughness);      
+    //                 float NDF = DistributionGGX(N, Half, roughness);
+    //                 float G = GeometrySmith(N, V, L, roughness);
     //                 float3 nominator = {NDF * G * F.x, NDF * G * F.y, NDF * G * F.z};
-    //                 float denominator = 4.0 * fmaxf(dot(N, V), 0.0) * fmaxf(dot(N, L), 0.0) + 0.001; 
-    //                 float3 spec = {nominator.x / denominator, nominator.y / denominator, nominator.z / denominator};               
-    //                 specular.x += spec.x * radiance.x * NdotL; 
-    //                 specular.y += spec.y * radiance.y * NdotL; 
-    //                 specular.z += spec.z * radiance.z * NdotL; 
+    //                 float denominator = 4.0 * fmaxf(dot(N, V), 0.0) * fmaxf(dot(N, L), 0.0) + 0.001;
+    //                 float3 spec = {nominator.x / denominator, nominator.y / denominator, nominator.z / denominator};
+    //                 specular.x += spec.x * radiance.x * NdotL;
+    //                 specular.y += spec.y * radiance.y * NdotL;
+    //                 specular.z += spec.z * radiance.z * NdotL;
 	// 				nrSamples++;
 	// 			    break;
 	// 		    }
@@ -795,16 +816,16 @@ SSRCUDA(
 
     dl_albedo[pix_id] = diffuse.x * dL_dpixels[pix_id];
     dl_albedo[1 * H * W + pix_id] = diffuse.y * dL_dpixels[1 * H * W + pix_id];
-    dl_albedo[2 * H * W + pix_id] = diffuse.z * dL_dpixels[2 * H * W + pix_id];	
+    dl_albedo[2 * H * W + pix_id] = diffuse.z * dL_dpixels[2 * H * W + pix_id];
 	dl_roughness[pix_id] = 0.0f;
     dl_roughness[1 * H * W + pix_id] = 0.0f;
     dl_roughness[2 * H * W + pix_id] = 0.0f;
 	dl_metallic[pix_id] = 0.0f;
     dl_metallic[1 * H * W + pix_id] = 0.0f;
-    dl_metallic[2 * H * W + pix_id] = 0.0f;	
+    dl_metallic[2 * H * W + pix_id] = 0.0f;
 	// color[pix_id] = diffuse.x + specular.x * (1.0 / float(nrSamples));
     // color[1 * H * W + pix_id] = diffuse.y + specular.y * (1.0 / float(nrSamples));
-    // color[2 * H * W + pix_id] = diffuse.z + specular.z * (1.0 / float(nrSamples));	
+    // color[2 * H * W + pix_id] = diffuse.z + specular.z * (1.0 / float(nrSamples));
 }
 
 
@@ -928,10 +949,10 @@ void BACKWARD::preprocess(
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot)
 {
-	// Propagate gradients for the path of 2D conic matrix computation. 
-	// Somewhat long, thus it is its own kernel rather than being part of 
+	// Propagate gradients for the path of 2D conic matrix computation.
+	// Somewhat long, thus it is its own kernel rather than being part of
 	// "preprocess". When done, loss gradient w.r.t. 3D means has been
-	// modified and gradient w.r.t. 3D covariance matrix has been computed.	
+	// modified and gradient w.r.t. 3D covariance matrix has been computed.
 	computeCov2DCUDA<<<(P + 255) / 256, 256>>>(
 		P,
 		means3D,
@@ -1040,7 +1061,7 @@ void BACKWARD::render(
 }
 
 void BACKWARD::SSR(
-	const dim3 grid, 
+	const dim3 grid,
 	const dim3 block,
 	int W, int H,
 	const float focal_x,
