@@ -775,42 +775,41 @@ SSAOCUDA(
 	TBN[6] = normal.x;
 	TBN[7] = normal.y;
 	TBN[8] = normal.z;
-	float occ = 0.0;
-	float sampleDelta = delta * M_PIf;
-    float nrSamples = 0.0; 
-    for(float phi = 0.0; phi < 2.0 * M_PIf; phi += sampleDelta)
+	float occ = 0.0f;
+	const float sampleDelta = delta * M_PIf;
+	const float cx = float(W) * 0.5f;
+	const float cy = float(H) * 0.5f;
+	const float depth_scale = 1.0f + pos.z * 0.01f;
+	const float step_scale = depth_scale * depth_scale * radius / float(step);
+    float nrSamples = 0.0f; 
+    for(float phi = 0.0f; phi < 2.0f * M_PIf; phi += sampleDelta)
     {
-        for(float theta = 0.0; theta <= 0.5 * M_PIf; theta += sampleDelta * 0.5)
+        float sin_phi, cos_phi;
+        __sincosf(phi, &sin_phi, &cos_phi);
+        for(float theta = 0.0f; theta <= 0.5f * M_PIf; theta += sampleDelta * 0.5f)
         {
-        // spherical to cartesian (in tangent space)
-			float cosh = cosf(theta);
-            float3 tangentSample = {sinf(theta) * cosf(phi),  sinf(theta) * sinf(phi), cosf(theta)};
-            tangentSample = normalize(tangentSample);
-        // tangent space to view
+            float sin_theta, cos_theta;
+            __sincosf(theta, &sin_theta, &cos_theta);
+            float3 tangentSample = {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
             float3 sampleVec = transformVec3x3(tangentSample, TBN);
-            float3 samplePos = {0.0f, 0.0f, 0.0f};
-			nrSamples += cosh * sinf(theta);
+			nrSamples += cos_theta * sin_theta;
 		    for(int j = start; j < step; ++j)
 		    {
-			    samplePos.x = pos.x + sampleVec.x * j * (1 + pos.z / 100) * (1 + pos.z / 100 ) * radius / step; //100=zfar-znear
-			    samplePos.y = pos.y + sampleVec.y * j * (1 + pos.z / 100) * (1 + pos.z / 100)* radius / step; 
-			    samplePos.z = pos.z + sampleVec.z * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
-			    float cx = float(W) / 2.0f, cy = float(H) / 2.0f;
+                const float fj = float(j);
+                float3 samplePos = {
+                    pos.x + sampleVec.x * fj * step_scale,
+                    pos.y + sampleVec.y * fj * step_scale,
+                    pos.z + sampleVec.z * fj * step_scale,
+                };
 			    int2 depth_id = get_coord(cx, cy, focal_x, focal_y, samplePos);
-			    if (depth_id.x < 0)
+			    if (depth_id.x < 0 || depth_id.x > W - 1 || depth_id.y < 0 || depth_id.y > H - 1)
 				    break;
-			    else if (depth_id.x > W - 1)
-				    break;
-			    if (depth_id.y < 0)
-				    break;
-			    else if (depth_id.y > H - 1)
-				    break;
-				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
-				
+                const int sample_pix = W * depth_id.y + depth_id.x;
+				const float sampleDepth = __ldg(&out_pos[2 * H * W + sample_pix]); 
 
 			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - thick) 
 			    {
-				    occ += cosh * sinf(theta);
+				    occ += cos_theta * sin_theta;
 				    break;
 			    }
 		    }
@@ -891,41 +890,46 @@ SSRCUDA(
     kD.y *= 1.0 - metallic;
     kD.z *= 1.0 - metallic;
 
-    float sampleDelta = delta * M_PIf;
-    float nrSamples = 0.0; 
-    for(float phi = 0.0; phi < 2.0 * M_PIf; phi += sampleDelta)
+    const float sampleDelta = delta * M_PIf;
+    const float cx = float(W) * 0.5f;
+    const float cy = float(H) * 0.5f;
+    const float depth_scale = 1.0f + pos.z * 0.01f;
+    const float step_scale = depth_scale * depth_scale * radius / float(step);
+    float nrSamples = 0.0f; 
+    for(float phi = 0.0f; phi < 2.0f * M_PIf; phi += sampleDelta)
     {
-        for(float theta = 0.0; theta <= 0.5 * M_PIf; theta += sampleDelta * 0.5)
+        float sin_phi, cos_phi;
+        __sincosf(phi, &sin_phi, &cos_phi);
+        for(float theta = 0.0f; theta <= 0.5f * M_PIf; theta += sampleDelta * 0.5f)
         {
-        // spherical to cartesian (in tangent space)
-            float3 tangentSample = {sinf(theta) * cosf(phi),  sinf(theta) * sinf(phi), cosf(theta)};
-            tangentSample = normalize(tangentSample);
-        // tangent space to view
+            float sin_theta, cos_theta;
+            __sincosf(theta, &sin_theta, &cos_theta);
+            float3 tangentSample = {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
             float3 sampleVec = transformVec3x3(tangentSample, TBN);
-            float3 samplePos = {0.0f, 0.0f, 0.0f};
-			nrSamples += 1;
+			nrSamples += 1.0f;
 		    for(int j = start; j < step; ++j)
 		    {
-			    samplePos.x = pos.x + sampleVec.x * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
-			    samplePos.y = pos.y + sampleVec.y * j * (1 + pos.z / 100) * (1 + pos.z / 100)* radius / step; 
-			    samplePos.z = pos.z + sampleVec.z * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
-			    float cx = float(W) / 2.0f, cy = float(H) / 2.0f;
+                const float fj = float(j);
+                float3 samplePos = {
+                    pos.x + sampleVec.x * fj * step_scale,
+                    pos.y + sampleVec.y * fj * step_scale,
+                    pos.z + sampleVec.z * fj * step_scale,
+                };
 			    int2 depth_id = get_coord(cx, cy, focal_x, focal_y, samplePos);
-			    if (depth_id.x < 0)
+			    if (depth_id.x < 0 || depth_id.x > W - 1 || depth_id.y < 0 || depth_id.y > H - 1)
 				    break;
-			    else if (depth_id.x > W - 1)
-				    break;
-			    if (depth_id.y < 0)
-				    break;
-			    else if (depth_id.y > H - 1)
-				    break;
-			    float3 rgb = {out_rgb[W * depth_id.y + depth_id.x], out_rgb[H * W + W * depth_id.y + depth_id.x], out_rgb[2 * H * W + W * depth_id.y + depth_id.x]}; 
-				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
+                const int sample_pix = W * depth_id.y + depth_id.x;
+			    float3 rgb = {
+                    __ldg(&out_rgb[sample_pix]),
+                    __ldg(&out_rgb[H * W + sample_pix]),
+                    __ldg(&out_rgb[2 * H * W + sample_pix])}; 
+				const float sampleDepth = __ldg(&out_pos[2 * H * W + sample_pix]); 
 			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - thick)  //0.05 0.1
 			    {
-				    diffuse.x += rgb.x * cosf(theta) * sinf(theta);
-                    diffuse.y += rgb.y * cosf(theta) * sinf(theta);
-                    diffuse.z += rgb.z * cosf(theta) * sinf(theta);
+				    const float cs = cos_theta * sin_theta;
+				    diffuse.x += rgb.x * cs;
+                    diffuse.y += rgb.y * cs;
+                    diffuse.z += rgb.z * cs;
                     // nrSamples++;
 				    break;
 			    }
