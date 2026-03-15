@@ -639,8 +639,40 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* albedo_ptr = albedo;
 	const float* roughness_ptr = roughness;
 	const float* metallic_ptr = metallic;
-	const bool has_feat = feat != nullptr && feat_dim > 0;
-	if (has_feat)
+	CHECK_CUDA(FORWARD::render(
+		tile_grid, block,
+		width, height,
+		focal_x, focal_y,
+		means3D,
+		cam_pos,
+		imgState.ranges,
+		binningState.point_list,
+		viewmatrix,
+		feature_ptr,
+		normal_ptr,
+		albedo_ptr,
+		roughness_ptr,
+		metallic_ptr,
+		geomState.pos_view,
+		geomState.means2D,
+		geomState.conic_opacity,
+		geomState.depths,
+		background,
+		imgState.n_contrib,
+		imgState.accum_alpha,
+		out_color,
+		out_opacity,
+		out_depth,
+		out_normal,
+		out_normal_view,
+		out_pos,
+		out_albedo,
+		out_roughness,
+		out_metallic,
+		argmax_depth,
+		inference), debug)
+
+	if (feat != nullptr && feat_dim > 0)
 	{
 		CHECK_CUDA(FORWARD::render_feature(
 			tile_grid,
@@ -655,41 +687,6 @@ int CudaRasterizer::Rasterizer::forward(
 			feat_dim,
 			feat_chunk,
 			out_feat), debug)
-	}
-	else
-	{
-		CHECK_CUDA(FORWARD::render(
-			tile_grid, block,
-			width, height,
-			focal_x, focal_y,
-			means3D,
-			cam_pos,
-			imgState.ranges,
-			binningState.point_list,
-			viewmatrix,
-			feature_ptr,
-			normal_ptr,
-			albedo_ptr,
-			roughness_ptr,
-			metallic_ptr,
-			geomState.pos_view,
-			geomState.means2D,
-			geomState.conic_opacity,
-			geomState.depths,
-			background,
-			imgState.n_contrib,
-			imgState.accum_alpha,
-			out_color,
-			out_opacity,
-			out_depth,
-			out_normal,
-			out_normal_view,
-			out_pos,
-			out_albedo,
-			out_roughness,
-			out_metallic,
-			argmax_depth,
-			inference), debug)
 	}
 
 	return num_rendered;
@@ -766,8 +763,42 @@ void CudaRasterizer::Rasterizer::backward(
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
 	const float* color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb;
-	const bool has_feat = feat_dim > 0;
-	if (has_feat)
+	CHECK_CUDA(BACKWARD::render(
+		tile_grid,
+		block,
+		width, height,
+		means3D,
+		cam_pos,
+		imgState.ranges,
+		binningState.point_list,
+		background,
+		geomState.means2D,
+		geomState.conic_opacity,
+		color_ptr,
+		normal,
+		albedo,
+		roughness,
+		metallic,
+		imgState.accum_alpha,
+		imgState.n_contrib,
+		dL_dpix_depth,
+		dL_dpix,
+		dL_dpix_opacity,
+		dL_dpix_normal,
+		dL_dpix_albedo,
+		dL_dpix_roughness,
+		dL_dpix_metallic,
+		(float3*)dL_dmean2D,
+		(float4*)dL_dconic,
+		dL_depth,
+		dL_dopacity,
+		dL_dcolor,
+		dL_dnormal,
+		dL_dalbedo,
+		dL_droughness,
+		dL_dmetallic), debug)
+
+	if (feat_dim > 0)
 	{
 		CHECK_CUDA(BACKWARD::render_feature(
 			tile_grid,
@@ -785,69 +816,32 @@ void CudaRasterizer::Rasterizer::backward(
 			feat_chunk,
 			dL_dfeature), debug)
 	}
-	else
-	{
-		CHECK_CUDA(BACKWARD::render(
-			tile_grid,
-			block,
-			width, height,
-			means3D,
-			cam_pos,
-			imgState.ranges,
-			binningState.point_list,
-			background,
-			geomState.means2D,
-			geomState.conic_opacity,
-			color_ptr,
-			normal,
-			albedo,
-			roughness,
-			metallic,
-			imgState.accum_alpha,
-			imgState.n_contrib,
-			dL_dpix_depth,
-			dL_dpix,
-			dL_dpix_opacity,
-			dL_dpix_normal,
-			dL_dpix_albedo,
-			dL_dpix_roughness,
-			dL_dpix_metallic,
-			(float3*)dL_dmean2D,
-			(float4*)dL_dconic,
-			dL_depth,
-			dL_dopacity,
-			dL_dcolor,
-			dL_dnormal,
-			dL_dalbedo,
-			dL_droughness,
-			dL_dmetallic), debug)
 
-		// Take care of the rest of preprocessing. Was the precomputed covariance
-		// given to us or a scales/rot pair? If precomputed, pass that. If not,
-		// use the one we computed ourselves.
-		const float* cov3D_ptr = (cov3D_precomp != nullptr) ? cov3D_precomp : geomState.cov3D;
-		CHECK_CUDA(BACKWARD::preprocess(P, D, M,
-			focal_x, focal_y,
-			tan_fovx, tan_fovy,
-			(float3*)means3D,
-			radii,
-			shs,
-			geomState.clamped,
-			(glm::vec3*)scales,
-			(glm::vec4*)rotations,
-			scale_modifier,
-			cov3D_ptr,
-			viewmatrix,
-			projmatrix,
-			(glm::vec3*)cam_pos,
-			(float3*)dL_dmean2D,
-			dL_dconic,
-			dL_depth,
-			(glm::vec3*)dL_dmean3D,
-			dL_dcolor,
-			dL_dcov3D,
-			dL_dsh,
-			(glm::vec3*)dL_dscale,
-			(glm::vec4*)dL_drot), debug)
-	}
+	// Take care of the rest of preprocessing. Was the precomputed covariance
+	// given to us or a scales/rot pair? If precomputed, pass that. If not,
+	// use the one we computed ourselves.
+	const float* cov3D_ptr = (cov3D_precomp != nullptr) ? cov3D_precomp : geomState.cov3D;
+	CHECK_CUDA(BACKWARD::preprocess(P, D, M,
+		focal_x, focal_y,
+		tan_fovx, tan_fovy,
+		(float3*)means3D,
+		radii,
+		shs,
+		geomState.clamped,
+		(glm::vec3*)scales,
+		(glm::vec4*)rotations,
+		scale_modifier,
+		cov3D_ptr,
+		viewmatrix,
+		projmatrix,
+		(glm::vec3*)cam_pos,
+		(float3*)dL_dmean2D,
+		dL_dconic,
+		dL_depth,
+		(glm::vec3*)dL_dmean3D,
+		dL_dcolor,
+		dL_dcov3D,
+		dL_dsh,
+		(glm::vec3*)dL_dscale,
+		(glm::vec4*)dL_drot), debug)
 }
