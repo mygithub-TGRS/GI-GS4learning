@@ -56,6 +56,19 @@ namespace BACKWARD
 		float* dL_droughness,
 		float* dL_dmetallic);
 
+	void render_feature(
+		const dim3 grid, const dim3 block,
+		const int W, int H,
+		const uint2* ranges,
+		const uint32_t* point_list,
+		const float2* means2D,
+		const float4* conic_opacity,
+		const float* final_Ts,
+		const uint32_t* n_contrib,
+		const float* dL_dpixels_feat,
+		const int feat_dim,
+		float* dL_dfeat);
+
 	void preprocess(
 		const int P, int D, int M,
 		const float focal_x, float focal_y,

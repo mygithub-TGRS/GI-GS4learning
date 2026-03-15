@@ -38,17 +38,18 @@ LiteRasterizeGaussiansCUDA(
 	const bool argmax_depth);
 	
 std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
     const torch::Tensor& colors,
     const torch::Tensor& opacity,
-    const torch::Tensor& normal,
-    const torch::Tensor& albedo,
-    const torch::Tensor& roughness,
-    const torch::Tensor& metallic,
-	const torch::Tensor& scales,
+	    const torch::Tensor& normal,
+	    const torch::Tensor& albedo,
+	    const torch::Tensor& roughness,
+	    const torch::Tensor& metallic,
+		const torch::Tensor& feature,
+		const torch::Tensor& scales,
 	const torch::Tensor& rotations,
 	const torch::Tensor& cov3D_precomp,
 	const torch::Tensor& sh,
@@ -67,10 +68,10 @@ RasterizeGaussiansCUDA(
 	const bool debug);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
- RasterizeGaussiansBackwardCUDA(
- 	const torch::Tensor& background,
-	const torch::Tensor& means3D,
+		torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+	RasterizeGaussiansBackwardCUDA(
+		const torch::Tensor& background,
+		const torch::Tensor& means3D,
 	const torch::Tensor& radii,
     const torch::Tensor& colors,
     const torch::Tensor& normal,
@@ -92,10 +93,11 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
     const torch::Tensor& dL_dout_color,
     const torch::Tensor& dL_dout_opacity,
     const torch::Tensor& dL_dout_normal,
-    const torch::Tensor& dL_dout_albedo,
-    const torch::Tensor& dL_dout_roughness,
-    const torch::Tensor& dL_dout_metallic,
-	const torch::Tensor& geomBuffer,
+	    const torch::Tensor& dL_dout_albedo,
+	    const torch::Tensor& dL_dout_roughness,
+	    const torch::Tensor& dL_dout_metallic,
+		const torch::Tensor& dL_dout_feature,
+		const torch::Tensor& geomBuffer,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	const int R,
