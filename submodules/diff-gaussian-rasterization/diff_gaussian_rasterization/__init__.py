@@ -245,7 +245,14 @@ class _RasterizeGaussians(torch.autograd.Function):
         ) = ctx.saved_tensors
 
         if grad_out_feature is None:
-            grad_out_feature = torch.Tensor([], device=means3D.device, dtype=means3D.dtype)
+            if feature.numel() > 0:
+                grad_out_feature = torch.zeros(
+                    (feature.shape[1], grad_out_color.shape[1], grad_out_color.shape[2]),
+                    device=means3D.device,
+                    dtype=means3D.dtype,
+                )
+            else:
+                grad_out_feature = torch.Tensor([], device=means3D.device, dtype=means3D.dtype)
 
        
 
