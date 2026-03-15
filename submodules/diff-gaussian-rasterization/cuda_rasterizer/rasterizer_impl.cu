@@ -511,6 +511,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const bool prefiltered,
 	const bool argmax_depth,
 	const bool inference,
+	const int feat_chunk,
 	float* out_color,		// [3, H, W]
 	float* out_opacity,		// [1, H, W]
 	float* out_depth,		// [1, H, W]
@@ -652,6 +653,7 @@ int CudaRasterizer::Rasterizer::forward(
 			geomState.conic_opacity,
 			feat,
 			feat_dim,
+			feat_chunk,
 			out_feat), debug)
 	}
 	else
@@ -742,6 +744,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
+	const int feat_chunk,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
@@ -779,6 +782,7 @@ void CudaRasterizer::Rasterizer::backward(
 			imgState.n_contrib,
 			dL_dpix_feature,
 			feat_dim,
+			feat_chunk,
 			dL_dfeature), debug)
 	}
 	else

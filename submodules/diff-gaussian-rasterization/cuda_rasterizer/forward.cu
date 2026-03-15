@@ -15,7 +15,6 @@
 #include <cooperative_groups.h>
 #include <math.h>
 #include <cooperative_groups/reduce.h>
-#include <cstdlib>
 namespace cg = cooperative_groups;
 
 // Forward method for converting the input spherical harmonics
@@ -1236,17 +1235,15 @@ void FORWARD::render_feature(
 	const float4* conic_opacity,
 	const float* feat,
 	const int feat_dim,
+	const int feat_chunk,
 	float* out_feat)
 {
 	if (feat_dim <= 0)
 		return;
 
-	int kChunk = 16;
-	if (const char* env = std::getenv("DGR_FEAT_CHUNK")) {
-		const int parsed = std::atoi(env);
-		if (parsed == 16 || parsed == 32 || parsed == 64 || parsed == 128) {
-			kChunk = parsed;
-		}
+	int kChunk = feat_chunk;
+	if (kChunk != 16 && kChunk != 32 && kChunk != 64 && kChunk != 128) {
+		kChunk = 16;
 	}
 
 	dim3 grid_feat = dim3(grid.x, grid.y, (feat_dim + kChunk - 1) / kChunk);

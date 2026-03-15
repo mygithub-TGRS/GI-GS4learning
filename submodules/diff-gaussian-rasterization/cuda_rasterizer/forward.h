@@ -113,6 +113,7 @@ namespace FORWARD
 		const float4* conic_opacity,
 		const float* feat,
 		const int feat_dim,
+		const int feat_chunk,
 		float* out_feat);
 	
 	void depthToNormal(

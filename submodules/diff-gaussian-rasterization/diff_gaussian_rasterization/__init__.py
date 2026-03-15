@@ -49,6 +49,7 @@ class GaussianRasterizationSettings(NamedTuple):
     debug: bool
     inference: bool
     argmax_depth: bool
+    feat_chunk: int = 16
 
 
 class _RasterizeGaussians(torch.autograd.Function):
@@ -108,6 +109,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.prefiltered,
             raster_settings.argmax_depth,
             raster_settings.inference,
+            raster_settings.feat_chunk,
             raster_settings.debug,
         )
 
@@ -290,6 +292,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             binningBuffer,
             imgBuffer,
             num_rendered,
+            raster_settings.feat_chunk,
             raster_settings.debug,
         )
 

@@ -13,7 +13,6 @@
 #include "auxiliary.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
-#include <cstdlib>
 #include "ssr.h"
 namespace cg = cooperative_groups;
 
@@ -1050,17 +1049,15 @@ void BACKWARD::render_feature(
 	const uint32_t* n_contrib,
 	const float* dL_dpixels_feat,
 	const int feat_dim,
+	const int feat_chunk,
 	float* dL_dfeat)
 {
 	if (feat_dim <= 0)
 		return;
 
-	int kChunk = 16;
-	if (const char* env = std::getenv("DGR_FEAT_CHUNK")) {
-		const int parsed = std::atoi(env);
-		if (parsed == 16 || parsed == 32 || parsed == 64 || parsed == 128) {
-			kChunk = parsed;
-		}
+	int kChunk = feat_chunk;
+	if (kChunk != 16 && kChunk != 32 && kChunk != 64 && kChunk != 128) {
+		kChunk = 16;
 	}
 
 	dim3 grid_feat = dim3(grid.x, grid.y, (feat_dim + kChunk - 1) / kChunk);

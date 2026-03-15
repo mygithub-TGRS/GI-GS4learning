@@ -141,6 +141,7 @@ namespace CudaRasterizer
 			const bool prefiltered,
 			const bool argmax_depth,
 			const bool inference,
+			const int feat_chunk,
 			float* out_color,
 			float* out_opacity,
 			float* out_depth,
@@ -201,6 +202,7 @@ namespace CudaRasterizer
 			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,
+			const int feat_chunk,
 			bool debug);
 	};
 };

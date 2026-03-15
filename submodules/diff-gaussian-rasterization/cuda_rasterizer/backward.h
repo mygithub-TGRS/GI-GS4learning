@@ -67,6 +67,7 @@ namespace BACKWARD
 		const uint32_t* n_contrib,
 		const float* dL_dpixels_feat,
 		const int feat_dim,
+		const int feat_chunk,
 		float* dL_dfeat);
 
 	void preprocess(
