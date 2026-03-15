@@ -54,7 +54,8 @@ namespace BACKWARD
 		float* dL_dnormals,
 		float* dL_dalbedo,
 		float* dL_droughness,
-		float* dL_dmetallic);
+		float* dL_dmetallic,
+		const bool compute_material_maps);
 
 	void render_feature(
 		const dim3 grid, const dim3 block,

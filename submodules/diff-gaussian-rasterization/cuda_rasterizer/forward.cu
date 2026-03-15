@@ -451,6 +451,7 @@ renderCUDA(
 	float* __restrict__ out_albedo,
 	float* __restrict__ out_roughness,
 	float* __restrict__ out_metallic,
+	const bool compute_material_maps,
 	bool argmax_depth,
 	bool inference)
 {
@@ -559,12 +560,15 @@ renderCUDA(
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++) {
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * weight;
-				A[ch] += albedo[collected_id[j] * CHANNELS + ch] * weight;
-                //if (NoV > 0.0f) // NOTE: the trick from GIR, do not make scene for scenes
+				if (compute_material_maps)
+					A[ch] += albedo[collected_id[j] * CHANNELS + ch] * weight;
+	                //if (NoV > 0.0f) // NOTE: the trick from GIR, do not make scene for scenes
 				N[ch] += normals[collected_id[j] * CHANNELS + ch] * weight;
 			}
-			R += roughness[collected_id[j]] * weight;
-			M += metallic[collected_id[j]] * weight;
+			if (compute_material_maps) {
+				R += roughness[collected_id[j]] * weight;
+				M += metallic[collected_id[j]] * weight;
+			}
 
 
 
@@ -607,14 +611,17 @@ renderCUDA(
 		for (int ch = 0; ch < CHANNELS; ch++) {
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 			out_normal[ch * H * W + pix_id] = N[ch];
-			out_albedo[ch * H * W + pix_id] = A[ch];
+			if (compute_material_maps)
+				out_albedo[ch * H * W + pix_id] = A[ch];
 		}
-		if (inference) {
-			out_roughness[pix_id] = R + T;
-		} else {
-			out_roughness[pix_id] = R;
+		if (compute_material_maps) {
+			if (inference) {
+				out_roughness[pix_id] = R + T;
+			} else {
+				out_roughness[pix_id] = R;
+			}
+			out_metallic[pix_id] = M;
 		}
-		out_metallic[pix_id] = M;
 		if (O > 1e-6) {
 			out_depth[pix_id] = argmax_depth ? except_depth : D / O;
 			out_pos[pix_id] = argmax_depth ? except_pos.x : POS.x / O;
@@ -1190,6 +1197,7 @@ void FORWARD::render(
 	float* out_albedo,
 	float* out_roughness,
 	float* out_metallic,
+	const bool compute_material_maps,
 	const bool argmax_depth,
 	const bool inference)
 {
@@ -1222,8 +1230,9 @@ void FORWARD::render(
 		out_albedo,
 		out_roughness,
 		out_metallic,
-			argmax_depth,
-			inference);
+		compute_material_maps,
+		argmax_depth,
+		inference);
 }
 
 void FORWARD::render_feature(

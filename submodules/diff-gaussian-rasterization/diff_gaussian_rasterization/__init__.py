@@ -50,6 +50,7 @@ class GaussianRasterizationSettings(NamedTuple):
     inference: bool
     argmax_depth: bool
     feat_chunk: int = 16
+    compute_material_maps: bool = True
 
 
 class _RasterizeGaussians(torch.autograd.Function):
@@ -110,6 +111,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.argmax_depth,
             raster_settings.inference,
             raster_settings.feat_chunk,
+            raster_settings.compute_material_maps,
             raster_settings.debug,
         )
 
@@ -293,6 +295,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             imgBuffer,
             num_rendered,
             raster_settings.feat_chunk,
+            raster_settings.compute_material_maps,
             raster_settings.debug,
         )
 

@@ -101,6 +101,7 @@ namespace FORWARD
 		float* out_albedo,
 		float* out_roughness,
 		float* out_metallic,
+		const bool compute_material_maps,
 		const bool argmax_depth,
 		const bool inference);
 

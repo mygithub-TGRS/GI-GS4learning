@@ -434,7 +434,8 @@ renderCUDA(
 	float* __restrict__ dL_dnormals,
 	float* __restrict__ dL_dalbedo,
 	float* __restrict__ dL_droughness,
-	float* __restrict__ dL_dmetallic)
+	float* __restrict__ dL_dmetallic,
+	const bool compute_material_maps)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -484,11 +485,14 @@ renderCUDA(
 		for (int i = 0; i < C; i++) {
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
 			dL_dpixel_normal[i] = dL_dpixels_normal[i * H * W + pix_id];
-			dL_dpixel_albedo[i] = dL_dpixels_albedo[i * H * W + pix_id];
+				if (compute_material_maps)
+					dL_dpixel_albedo[i] = dL_dpixels_albedo[i * H * W + pix_id];
 		}
 		dL_dpixel_opacity = dL_dpixels_opacity[pix_id];
-		dL_dpixel_roughness = dL_dpixels_roughness[pix_id];
-		dL_dpixel_metallic = dL_dpixels_metallic[pix_id];
+			if (compute_material_maps) {
+				dL_dpixel_roughness = dL_dpixels_roughness[pix_id];
+				dL_dpixel_metallic = dL_dpixels_metallic[pix_id];
+			}
 		dL_dpixel_depth = dL_dpixels_depth[pix_id];
 	}
 	float last_color[C] = { 0.0f };
@@ -582,11 +586,15 @@ renderCUDA(
 					const float dL_dchannel_normal = dL_dpixel_normal[ch];
 					atomicAdd(&(dL_dnormals[global_id * C + ch]), dchannel_dcolor * dL_dchannel_normal);
 				//}
-				const float dL_dchannel_albedo = dL_dpixel_albedo[ch];
-				atomicAdd(&(dL_dalbedo[global_id * C + ch]), dchannel_dcolor * dL_dchannel_albedo);
+				if (compute_material_maps) {
+					const float dL_dchannel_albedo = dL_dpixel_albedo[ch];
+					atomicAdd(&(dL_dalbedo[global_id * C + ch]), dchannel_dcolor * dL_dchannel_albedo);
+				}
 			}
-			atomicAdd(&(dL_droughness[global_id]), dchannel_dcolor * dL_dpixel_roughness);
-			atomicAdd(&(dL_dmetallic[global_id]), dchannel_dcolor * dL_dpixel_metallic);
+			if (compute_material_maps) {
+				atomicAdd(&(dL_droughness[global_id]), dchannel_dcolor * dL_dpixel_roughness);
+				atomicAdd(&(dL_dmetallic[global_id]), dchannel_dcolor * dL_dpixel_metallic);
+			}
 			atomicAdd(&(dL_depth[global_id]), dchannel_dcolor * dL_dpixel_depth);
 
 			// NOTE: for opacity
@@ -1001,7 +1009,8 @@ void BACKWARD::render(
 	float* dL_dnormals,
 	float* dL_dalbedo,
 	float* dL_droughness,
-	float* dL_dmetallic)
+	float* dL_dmetallic,
+	const bool compute_material_maps)
 {
 	renderCUDA<NUM_CHANNELS><<<grid, block>>>(
 		W, H,
@@ -1034,7 +1043,8 @@ void BACKWARD::render(
 		dL_dnormals,
 		dL_dalbedo,
 		dL_droughness,
-			dL_dmetallic
+			dL_dmetallic,
+			compute_material_maps
 		);
 }
 

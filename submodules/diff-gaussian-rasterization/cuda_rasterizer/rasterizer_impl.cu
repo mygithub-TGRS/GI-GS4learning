@@ -512,6 +512,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const bool argmax_depth,
 	const bool inference,
 	const int feat_chunk,
+	const bool compute_material_maps,
 	float* out_color,		// [3, H, W]
 	float* out_opacity,		// [1, H, W]
 	float* out_depth,		// [1, H, W]
@@ -669,6 +670,7 @@ int CudaRasterizer::Rasterizer::forward(
 		out_albedo,
 		out_roughness,
 		out_metallic,
+		compute_material_maps,
 		argmax_depth,
 		inference), debug)
 
@@ -742,6 +744,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dscale,
 	float* dL_drot,
 	const int feat_chunk,
+	const bool compute_material_maps,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
@@ -796,7 +799,8 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dnormal,
 		dL_dalbedo,
 		dL_droughness,
-		dL_dmetallic), debug)
+		dL_dmetallic,
+		compute_material_maps), debug)
 
 	if (feat_dim > 0)
 	{

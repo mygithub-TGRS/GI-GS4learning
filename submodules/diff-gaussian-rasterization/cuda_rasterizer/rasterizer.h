@@ -142,6 +142,7 @@ namespace CudaRasterizer
 			const bool argmax_depth,
 			const bool inference,
 			const int feat_chunk,
+			const bool compute_material_maps,
 			float* out_color,
 			float* out_opacity,
 			float* out_depth,
@@ -203,6 +204,7 @@ namespace CudaRasterizer
 			float* dL_dscale,
 			float* dL_drot,
 			const int feat_chunk,
+			const bool compute_material_maps,
 			bool debug);
 	};
 };

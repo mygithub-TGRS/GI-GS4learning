@@ -66,6 +66,7 @@ RasterizeGaussiansCUDA(
 	const bool argmax_depth,
 	const bool inference,
 	const int feat_chunk,
+	const bool compute_material_maps,
 	const bool debug);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
@@ -103,6 +104,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& imageBuffer,
 	const int R,
 	const int feat_chunk,
+	const bool compute_material_maps,
 	const bool debug);
 
 torch::Tensor markVisible(

@@ -156,6 +156,7 @@ RasterizeGaussiansCUDA(
 	const bool argmax_depth,
 	const bool inference,
 	const int feat_chunk,
+	const bool compute_material_maps,
 	const bool debug
 ) {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
@@ -228,6 +229,7 @@ RasterizeGaussiansCUDA(
 			argmax_depth,
 			inference,
 			feat_chunk,
+			compute_material_maps,
 			out_color.contiguous().data<float>(),
 			out_opacity.contiguous().data<float>(),
 			out_depth.contiguous().data<float>(),
@@ -295,6 +297,7 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& imageBuffer,
 	const int R,
 	const int feat_chunk,
+	const bool compute_material_maps,
 	const bool debug
 ) {
 	const int P = means3D.size(0);
@@ -373,6 +376,7 @@ RasterizeGaussiansBackwardCUDA(
 			dL_dscales.contiguous().data<float>(),
 			dL_drotations.contiguous().data<float>(),
 			feat_chunk,
+			compute_material_maps,
 			debug);
 	}
 
