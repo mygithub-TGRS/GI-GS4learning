@@ -13,6 +13,7 @@
 #include "auxiliary.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+#include <cstdlib>
 #include "ssr.h"
 namespace cg = cooperative_groups;
 
@@ -1054,20 +1055,34 @@ void BACKWARD::render_feature(
 	if (feat_dim <= 0)
 		return;
 
-	constexpr int kChunk = 16;
+	int kChunk = 16;
+	if (const char* env = std::getenv("DGR_FEAT_CHUNK")) {
+		const int parsed = std::atoi(env);
+		if (parsed == 16 || parsed == 32 || parsed == 64 || parsed == 128) {
+			kChunk = parsed;
+		}
+	}
+
 	dim3 grid_feat = dim3(grid.x, grid.y, (feat_dim + kChunk - 1) / kChunk);
-	renderFeatureBackwardCUDA<kChunk><<<grid_feat, block>>>(
-		W,
-		H,
-		ranges,
-		point_list,
-		means2D,
-		conic_opacity,
-		final_Ts,
-		n_contrib,
-		dL_dpixels_feat,
-		feat_dim,
-		dL_dfeat);
+	switch (kChunk) {
+		case 32:
+			renderFeatureBackwardCUDA<32><<<grid_feat, block>>>(
+				W, H, ranges, point_list, means2D, conic_opacity, final_Ts, n_contrib, dL_dpixels_feat, feat_dim, dL_dfeat);
+			break;
+		case 64:
+			renderFeatureBackwardCUDA<64><<<grid_feat, block>>>(
+				W, H, ranges, point_list, means2D, conic_opacity, final_Ts, n_contrib, dL_dpixels_feat, feat_dim, dL_dfeat);
+			break;
+		case 128:
+			renderFeatureBackwardCUDA<128><<<grid_feat, block>>>(
+				W, H, ranges, point_list, means2D, conic_opacity, final_Ts, n_contrib, dL_dpixels_feat, feat_dim, dL_dfeat);
+			break;
+		case 16:
+		default:
+			renderFeatureBackwardCUDA<16><<<grid_feat, block>>>(
+				W, H, ranges, point_list, means2D, conic_opacity, final_Ts, n_contrib, dL_dpixels_feat, feat_dim, dL_dfeat);
+			break;
+	}
 }
 
 void BACKWARD::SSR(

@@ -15,6 +15,7 @@
 #include <cooperative_groups.h>
 #include <math.h>
 #include <cooperative_groups/reduce.h>
+#include <cstdlib>
 namespace cg = cooperative_groups;
 
 // Forward method for converting the input spherical harmonics
@@ -1240,18 +1241,34 @@ void FORWARD::render_feature(
 	if (feat_dim <= 0)
 		return;
 
-	constexpr int kChunk = 16;
+	int kChunk = 16;
+	if (const char* env = std::getenv("DGR_FEAT_CHUNK")) {
+		const int parsed = std::atoi(env);
+		if (parsed == 16 || parsed == 32 || parsed == 64 || parsed == 128) {
+			kChunk = parsed;
+		}
+	}
+
 	dim3 grid_feat = dim3(grid.x, grid.y, (feat_dim + kChunk - 1) / kChunk);
-	renderFeatureCUDA<kChunk><<<grid_feat, block>>>(
-		W,
-		H,
-		ranges,
-		point_list,
-		points_xy_image,
-		conic_opacity,
-		feat,
-		feat_dim,
-		out_feat);
+	switch (kChunk) {
+		case 32:
+			renderFeatureCUDA<32><<<grid_feat, block>>>(
+				W, H, ranges, point_list, points_xy_image, conic_opacity, feat, feat_dim, out_feat);
+			break;
+		case 64:
+			renderFeatureCUDA<64><<<grid_feat, block>>>(
+				W, H, ranges, point_list, points_xy_image, conic_opacity, feat, feat_dim, out_feat);
+			break;
+		case 128:
+			renderFeatureCUDA<128><<<grid_feat, block>>>(
+				W, H, ranges, point_list, points_xy_image, conic_opacity, feat, feat_dim, out_feat);
+			break;
+		case 16:
+		default:
+			renderFeatureCUDA<16><<<grid_feat, block>>>(
+				W, H, ranges, point_list, points_xy_image, conic_opacity, feat, feat_dim, out_feat);
+			break;
+	}
 }
 
 void FORWARD::preprocess(
