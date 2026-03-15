@@ -101,6 +101,7 @@ namespace FORWARD
 		float* out_albedo,
 		float* out_roughness,
 		float* out_metallic,
+		const bool compute_material_maps,
 		const bool argmax_depth,
 		const bool inference);
 
@@ -113,6 +114,7 @@ namespace FORWARD
 		const float4* conic_opacity,
 		const float* feat,
 		const int feat_dim,
+		const int feat_chunk,
 		float* out_feat);
 	
 	void depthToNormal(

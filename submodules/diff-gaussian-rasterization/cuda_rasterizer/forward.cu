@@ -451,6 +451,7 @@ renderCUDA(
 	float* __restrict__ out_albedo,
 	float* __restrict__ out_roughness,
 	float* __restrict__ out_metallic,
+	const bool compute_material_maps,
 	bool argmax_depth,
 	bool inference)
 {
@@ -559,12 +560,15 @@ renderCUDA(
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++) {
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * weight;
-				A[ch] += albedo[collected_id[j] * CHANNELS + ch] * weight;
-                //if (NoV > 0.0f) // NOTE: the trick from GIR, do not make scene for scenes
+				if (compute_material_maps)
+					A[ch] += albedo[collected_id[j] * CHANNELS + ch] * weight;
+	                //if (NoV > 0.0f) // NOTE: the trick from GIR, do not make scene for scenes
 				N[ch] += normals[collected_id[j] * CHANNELS + ch] * weight;
 			}
-			R += roughness[collected_id[j]] * weight;
-			M += metallic[collected_id[j]] * weight;
+			if (compute_material_maps) {
+				R += roughness[collected_id[j]] * weight;
+				M += metallic[collected_id[j]] * weight;
+			}
 
 
 
@@ -607,14 +611,17 @@ renderCUDA(
 		for (int ch = 0; ch < CHANNELS; ch++) {
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 			out_normal[ch * H * W + pix_id] = N[ch];
-			out_albedo[ch * H * W + pix_id] = A[ch];
+			if (compute_material_maps)
+				out_albedo[ch * H * W + pix_id] = A[ch];
 		}
-		if (inference) {
-			out_roughness[pix_id] = R + T;
-		} else {
-			out_roughness[pix_id] = R;
+		if (compute_material_maps) {
+			if (inference) {
+				out_roughness[pix_id] = R + T;
+			} else {
+				out_roughness[pix_id] = R;
+			}
+			out_metallic[pix_id] = M;
 		}
-		out_metallic[pix_id] = M;
 		if (O > 1e-6) {
 			out_depth[pix_id] = argmax_depth ? except_depth : D / O;
 			out_pos[pix_id] = argmax_depth ? except_pos.x : POS.x / O;
@@ -768,42 +775,41 @@ SSAOCUDA(
 	TBN[6] = normal.x;
 	TBN[7] = normal.y;
 	TBN[8] = normal.z;
-	float occ = 0.0;
-	float sampleDelta = delta * M_PIf;
-    float nrSamples = 0.0; 
-    for(float phi = 0.0; phi < 2.0 * M_PIf; phi += sampleDelta)
+	float occ = 0.0f;
+	const float sampleDelta = delta * M_PIf;
+	const float cx = float(W) * 0.5f;
+	const float cy = float(H) * 0.5f;
+	const float depth_scale = 1.0f + pos.z * 0.01f;
+	const float step_scale = depth_scale * depth_scale * radius / float(step);
+    float nrSamples = 0.0f; 
+    for(float phi = 0.0f; phi < 2.0f * M_PIf; phi += sampleDelta)
     {
-        for(float theta = 0.0; theta <= 0.5 * M_PIf; theta += sampleDelta * 0.5)
+        float sin_phi, cos_phi;
+        __sincosf(phi, &sin_phi, &cos_phi);
+        for(float theta = 0.0f; theta <= 0.5f * M_PIf; theta += sampleDelta * 0.5f)
         {
-        // spherical to cartesian (in tangent space)
-			float cosh = cosf(theta);
-            float3 tangentSample = {sinf(theta) * cosf(phi),  sinf(theta) * sinf(phi), cosf(theta)};
-            tangentSample = normalize(tangentSample);
-        // tangent space to view
+            float sin_theta, cos_theta;
+            __sincosf(theta, &sin_theta, &cos_theta);
+            float3 tangentSample = {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
             float3 sampleVec = transformVec3x3(tangentSample, TBN);
-            float3 samplePos = {0.0f, 0.0f, 0.0f};
-			nrSamples += cosh * sinf(theta);
+			nrSamples += cos_theta * sin_theta;
 		    for(int j = start; j < step; ++j)
 		    {
-			    samplePos.x = pos.x + sampleVec.x * j * (1 + pos.z / 100) * (1 + pos.z / 100 ) * radius / step; //100=zfar-znear
-			    samplePos.y = pos.y + sampleVec.y * j * (1 + pos.z / 100) * (1 + pos.z / 100)* radius / step; 
-			    samplePos.z = pos.z + sampleVec.z * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
-			    float cx = float(W) / 2.0f, cy = float(H) / 2.0f;
+                const float fj = float(j);
+                float3 samplePos = {
+                    pos.x + sampleVec.x * fj * step_scale,
+                    pos.y + sampleVec.y * fj * step_scale,
+                    pos.z + sampleVec.z * fj * step_scale,
+                };
 			    int2 depth_id = get_coord(cx, cy, focal_x, focal_y, samplePos);
-			    if (depth_id.x < 0)
+			    if (depth_id.x < 0 || depth_id.x > W - 1 || depth_id.y < 0 || depth_id.y > H - 1)
 				    break;
-			    else if (depth_id.x > W - 1)
-				    break;
-			    if (depth_id.y < 0)
-				    break;
-			    else if (depth_id.y > H - 1)
-				    break;
-				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
-				
+                const int sample_pix = W * depth_id.y + depth_id.x;
+				const float sampleDepth = __ldg(&out_pos[2 * H * W + sample_pix]); 
 
 			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - thick) 
 			    {
-				    occ += cosh * sinf(theta);
+				    occ += cos_theta * sin_theta;
 				    break;
 			    }
 		    }
@@ -884,41 +890,46 @@ SSRCUDA(
     kD.y *= 1.0 - metallic;
     kD.z *= 1.0 - metallic;
 
-    float sampleDelta = delta * M_PIf;
-    float nrSamples = 0.0; 
-    for(float phi = 0.0; phi < 2.0 * M_PIf; phi += sampleDelta)
+    const float sampleDelta = delta * M_PIf;
+    const float cx = float(W) * 0.5f;
+    const float cy = float(H) * 0.5f;
+    const float depth_scale = 1.0f + pos.z * 0.01f;
+    const float step_scale = depth_scale * depth_scale * radius / float(step);
+    float nrSamples = 0.0f; 
+    for(float phi = 0.0f; phi < 2.0f * M_PIf; phi += sampleDelta)
     {
-        for(float theta = 0.0; theta <= 0.5 * M_PIf; theta += sampleDelta * 0.5)
+        float sin_phi, cos_phi;
+        __sincosf(phi, &sin_phi, &cos_phi);
+        for(float theta = 0.0f; theta <= 0.5f * M_PIf; theta += sampleDelta * 0.5f)
         {
-        // spherical to cartesian (in tangent space)
-            float3 tangentSample = {sinf(theta) * cosf(phi),  sinf(theta) * sinf(phi), cosf(theta)};
-            tangentSample = normalize(tangentSample);
-        // tangent space to view
+            float sin_theta, cos_theta;
+            __sincosf(theta, &sin_theta, &cos_theta);
+            float3 tangentSample = {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
             float3 sampleVec = transformVec3x3(tangentSample, TBN);
-            float3 samplePos = {0.0f, 0.0f, 0.0f};
-			nrSamples += 1;
+			nrSamples += 1.0f;
 		    for(int j = start; j < step; ++j)
 		    {
-			    samplePos.x = pos.x + sampleVec.x * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
-			    samplePos.y = pos.y + sampleVec.y * j * (1 + pos.z / 100) * (1 + pos.z / 100)* radius / step; 
-			    samplePos.z = pos.z + sampleVec.z * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
-			    float cx = float(W) / 2.0f, cy = float(H) / 2.0f;
+                const float fj = float(j);
+                float3 samplePos = {
+                    pos.x + sampleVec.x * fj * step_scale,
+                    pos.y + sampleVec.y * fj * step_scale,
+                    pos.z + sampleVec.z * fj * step_scale,
+                };
 			    int2 depth_id = get_coord(cx, cy, focal_x, focal_y, samplePos);
-			    if (depth_id.x < 0)
+			    if (depth_id.x < 0 || depth_id.x > W - 1 || depth_id.y < 0 || depth_id.y > H - 1)
 				    break;
-			    else if (depth_id.x > W - 1)
-				    break;
-			    if (depth_id.y < 0)
-				    break;
-			    else if (depth_id.y > H - 1)
-				    break;
-			    float3 rgb = {out_rgb[W * depth_id.y + depth_id.x], out_rgb[H * W + W * depth_id.y + depth_id.x], out_rgb[2 * H * W + W * depth_id.y + depth_id.x]}; 
-				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
+                const int sample_pix = W * depth_id.y + depth_id.x;
+			    float3 rgb = {
+                    __ldg(&out_rgb[sample_pix]),
+                    __ldg(&out_rgb[H * W + sample_pix]),
+                    __ldg(&out_rgb[2 * H * W + sample_pix])}; 
+				const float sampleDepth = __ldg(&out_pos[2 * H * W + sample_pix]); 
 			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - thick)  //0.05 0.1
 			    {
-				    diffuse.x += rgb.x * cosf(theta) * sinf(theta);
-                    diffuse.y += rgb.y * cosf(theta) * sinf(theta);
-                    diffuse.z += rgb.z * cosf(theta) * sinf(theta);
+				    const float cs = cos_theta * sin_theta;
+				    diffuse.x += rgb.x * cs;
+                    diffuse.y += rgb.y * cs;
+                    diffuse.z += rgb.z * cs;
                     // nrSamples++;
 				    break;
 			    }
@@ -1190,6 +1201,7 @@ void FORWARD::render(
 	float* out_albedo,
 	float* out_roughness,
 	float* out_metallic,
+	const bool compute_material_maps,
 	const bool argmax_depth,
 	const bool inference)
 {
@@ -1222,8 +1234,9 @@ void FORWARD::render(
 		out_albedo,
 		out_roughness,
 		out_metallic,
-			argmax_depth,
-			inference);
+		compute_material_maps,
+		argmax_depth,
+		inference);
 }
 
 void FORWARD::render_feature(
@@ -1235,23 +1248,37 @@ void FORWARD::render_feature(
 	const float4* conic_opacity,
 	const float* feat,
 	const int feat_dim,
+	const int feat_chunk,
 	float* out_feat)
 {
 	if (feat_dim <= 0)
 		return;
 
-	constexpr int kChunk = 16;
+	int kChunk = feat_chunk;
+	if (kChunk != 16 && kChunk != 32 && kChunk != 64 && kChunk != 128) {
+		kChunk = 16;
+	}
+
 	dim3 grid_feat = dim3(grid.x, grid.y, (feat_dim + kChunk - 1) / kChunk);
-	renderFeatureCUDA<kChunk><<<grid_feat, block>>>(
-		W,
-		H,
-		ranges,
-		point_list,
-		points_xy_image,
-		conic_opacity,
-		feat,
-		feat_dim,
-		out_feat);
+	switch (kChunk) {
+		case 32:
+			renderFeatureCUDA<32><<<grid_feat, block>>>(
+				W, H, ranges, point_list, points_xy_image, conic_opacity, feat, feat_dim, out_feat);
+			break;
+		case 64:
+			renderFeatureCUDA<64><<<grid_feat, block>>>(
+				W, H, ranges, point_list, points_xy_image, conic_opacity, feat, feat_dim, out_feat);
+			break;
+		case 128:
+			renderFeatureCUDA<128><<<grid_feat, block>>>(
+				W, H, ranges, point_list, points_xy_image, conic_opacity, feat, feat_dim, out_feat);
+			break;
+		case 16:
+		default:
+			renderFeatureCUDA<16><<<grid_feat, block>>>(
+				W, H, ranges, point_list, points_xy_image, conic_opacity, feat, feat_dim, out_feat);
+			break;
+	}
 }
 
 void FORWARD::preprocess(

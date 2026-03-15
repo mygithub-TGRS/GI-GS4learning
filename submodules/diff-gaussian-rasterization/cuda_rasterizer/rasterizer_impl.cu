@@ -511,6 +511,8 @@ int CudaRasterizer::Rasterizer::forward(
 	const bool prefiltered,
 	const bool argmax_depth,
 	const bool inference,
+	const int feat_chunk,
+	const bool compute_material_maps,
 	float* out_color,		// [3, H, W]
 	float* out_opacity,		// [1, H, W]
 	float* out_depth,		// [1, H, W]
@@ -668,21 +670,26 @@ int CudaRasterizer::Rasterizer::forward(
 		out_albedo,
 		out_roughness,
 		out_metallic,
+		compute_material_maps,
 		argmax_depth,
 		inference), debug)
 
-	CHECK_CUDA(FORWARD::render_feature(
-		tile_grid,
-		block,
-		width,
-		height,
-		imgState.ranges,
-		binningState.point_list,
-		geomState.means2D,
-		geomState.conic_opacity,
-		feat,
-		feat_dim,
-		out_feat), debug)
+	if (feat != nullptr && feat_dim > 0)
+	{
+		CHECK_CUDA(FORWARD::render_feature(
+			tile_grid,
+			block,
+			width,
+			height,
+			imgState.ranges,
+			binningState.point_list,
+			geomState.means2D,
+			geomState.conic_opacity,
+			feat,
+			feat_dim,
+			feat_chunk,
+			out_feat), debug)
+	}
 
 	return num_rendered;
 }
@@ -736,6 +743,8 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
+	const int feat_chunk,
+	const bool compute_material_maps,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
@@ -790,22 +799,27 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dnormal,
 		dL_dalbedo,
 		dL_droughness,
-		dL_dmetallic), debug)
+		dL_dmetallic,
+		compute_material_maps), debug)
 
-	CHECK_CUDA(BACKWARD::render_feature(
-		tile_grid,
-		block,
-		width,
-		height,
-		imgState.ranges,
-		binningState.point_list,
-		geomState.means2D,
-		geomState.conic_opacity,
-		imgState.accum_alpha,
-		imgState.n_contrib,
-		dL_dpix_feature,
-		feat_dim,
-		dL_dfeature), debug)
+	if (feat_dim > 0)
+	{
+		CHECK_CUDA(BACKWARD::render_feature(
+			tile_grid,
+			block,
+			width,
+			height,
+			imgState.ranges,
+			binningState.point_list,
+			geomState.means2D,
+			geomState.conic_opacity,
+			imgState.accum_alpha,
+			imgState.n_contrib,
+			dL_dpix_feature,
+			feat_dim,
+			feat_chunk,
+			dL_dfeature), debug)
+	}
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,

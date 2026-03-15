@@ -434,7 +434,8 @@ renderCUDA(
 	float* __restrict__ dL_dnormals,
 	float* __restrict__ dL_dalbedo,
 	float* __restrict__ dL_droughness,
-	float* __restrict__ dL_dmetallic)
+	float* __restrict__ dL_dmetallic,
+	const bool compute_material_maps)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -484,11 +485,14 @@ renderCUDA(
 		for (int i = 0; i < C; i++) {
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
 			dL_dpixel_normal[i] = dL_dpixels_normal[i * H * W + pix_id];
-			dL_dpixel_albedo[i] = dL_dpixels_albedo[i * H * W + pix_id];
+				if (compute_material_maps)
+					dL_dpixel_albedo[i] = dL_dpixels_albedo[i * H * W + pix_id];
 		}
 		dL_dpixel_opacity = dL_dpixels_opacity[pix_id];
-		dL_dpixel_roughness = dL_dpixels_roughness[pix_id];
-		dL_dpixel_metallic = dL_dpixels_metallic[pix_id];
+			if (compute_material_maps) {
+				dL_dpixel_roughness = dL_dpixels_roughness[pix_id];
+				dL_dpixel_metallic = dL_dpixels_metallic[pix_id];
+			}
 		dL_dpixel_depth = dL_dpixels_depth[pix_id];
 	}
 	float last_color[C] = { 0.0f };
@@ -582,11 +586,15 @@ renderCUDA(
 					const float dL_dchannel_normal = dL_dpixel_normal[ch];
 					atomicAdd(&(dL_dnormals[global_id * C + ch]), dchannel_dcolor * dL_dchannel_normal);
 				//}
-				const float dL_dchannel_albedo = dL_dpixel_albedo[ch];
-				atomicAdd(&(dL_dalbedo[global_id * C + ch]), dchannel_dcolor * dL_dchannel_albedo);
+				if (compute_material_maps) {
+					const float dL_dchannel_albedo = dL_dpixel_albedo[ch];
+					atomicAdd(&(dL_dalbedo[global_id * C + ch]), dchannel_dcolor * dL_dchannel_albedo);
+				}
 			}
-			atomicAdd(&(dL_droughness[global_id]), dchannel_dcolor * dL_dpixel_roughness);
-			atomicAdd(&(dL_dmetallic[global_id]), dchannel_dcolor * dL_dpixel_metallic);
+			if (compute_material_maps) {
+				atomicAdd(&(dL_droughness[global_id]), dchannel_dcolor * dL_dpixel_roughness);
+				atomicAdd(&(dL_dmetallic[global_id]), dchannel_dcolor * dL_dpixel_metallic);
+			}
 			atomicAdd(&(dL_depth[global_id]), dchannel_dcolor * dL_dpixel_depth);
 
 			// NOTE: for opacity
@@ -789,40 +797,45 @@ SSRCUDA(
     kD.y *= 1.0 - metallic;
     kD.z *= 1.0 - metallic;
 
-    float sampleDelta = 0.0625 * M_PIf;
-    float nrSamples = 0.0; 
-    for(float phi = 0.0; phi < 2.0 * M_PIf; phi += sampleDelta)
+    const float sampleDelta = 0.0625f * M_PIf;
+    const float cx = float(W) * 0.5f;
+    const float cy = float(H) * 0.5f;
+    const float depth_scale = 1.0f + pos.z * 0.01f;
+    const float step_scale = depth_scale * depth_scale * radius / float(step);
+    float nrSamples = 0.0f; 
+    for(float phi = 0.0f; phi < 2.0f * M_PIf; phi += sampleDelta)
     {
-        for(float theta = 0.0; theta <= 0.5 * M_PIf; theta += sampleDelta * 0.5)
+        float sin_phi, cos_phi;
+        __sincosf(phi, &sin_phi, &cos_phi);
+        for(float theta = 0.0f; theta <= 0.5f * M_PIf; theta += sampleDelta * 0.5f)
         {
-        // spherical to cartesian (in tangent space)
-            float3 tangentSample = {sinf(theta) * cosf(phi),  sinf(theta) * sinf(phi), cosf(theta)};
-            tangentSample = normalize(tangentSample);
-        // tangent space to view
+            float sin_theta, cos_theta;
+            __sincosf(theta, &sin_theta, &cos_theta);
+            float3 tangentSample = {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
             float3 sampleVec = transformVec3x3(tangentSample, TBN);
-            float3 samplePos = {0.0f, 0.0f, 0.0f};
 		    for(int j = 8; j < step; ++j)
 		    {
-			    samplePos.x = pos.x + sampleVec.x * j * (1 + pos.z / 100) * (1 + pos.z / 100 ) * radius / step; 
-			    samplePos.y = pos.y + sampleVec.y * j * (1 + pos.z / 100) * (1 + pos.z / 100)* radius / step; 
-			    samplePos.z = pos.z + sampleVec.z * j * (1 + pos.z / 100) * (1 + pos.z / 100) * radius / step; 
-			    float cx = float(W) / 2.0f, cy = float(H) / 2.0f;
+                const float fj = float(j);
+                float3 samplePos = {
+                    pos.x + sampleVec.x * fj * step_scale,
+                    pos.y + sampleVec.y * fj * step_scale,
+                    pos.z + sampleVec.z * fj * step_scale,
+                };
 			    int2 depth_id = get_coord(cx, cy, focal_x, focal_y, samplePos);
-			    if (depth_id.x < 0)
+			    if (depth_id.x < 0 || depth_id.x > W - 1 || depth_id.y < 0 || depth_id.y > H - 1)
 				    break;
-			    else if (depth_id.x > W - 1)
-				    break;
-			    if (depth_id.y < 0)
-				    break;
-			    else if (depth_id.y > H - 1)
-				    break;
-			    float3 rgb = {out_rgb[W * depth_id.y + depth_id.x], out_rgb[H * W + W * depth_id.y + depth_id.x], out_rgb[2 * H * W + W * depth_id.y + depth_id.x]}; 
-				float sampleDepth = out_pos[2 * H * W + W * depth_id.y + depth_id.x]; 
-			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - 0.05)
+                const int sample_pix = W * depth_id.y + depth_id.x;
+			    float3 rgb = {
+                    __ldg(&out_rgb[sample_pix]),
+                    __ldg(&out_rgb[H * W + sample_pix]),
+                    __ldg(&out_rgb[2 * H * W + sample_pix])}; 
+				const float sampleDepth = __ldg(&out_pos[2 * H * W + sample_pix]); 
+			    if (sampleDepth <= samplePos.z + bias && sampleDepth >= samplePos.z - 0.05f)
 			    {
-					diffuse.x += rgb.x * cosf(theta) * sinf(theta);
-                    diffuse.y += rgb.y * cosf(theta) * sinf(theta);
-                    diffuse.z += rgb.z * cosf(theta) * sinf(theta);
+                    const float cs = cos_theta * sin_theta;
+					diffuse.x += rgb.x * cs;
+                    diffuse.y += rgb.y * cs;
+                    diffuse.z += rgb.z * cs;
                     nrSamples++;
 				    break;
 			    }
@@ -1001,7 +1014,8 @@ void BACKWARD::render(
 	float* dL_dnormals,
 	float* dL_dalbedo,
 	float* dL_droughness,
-	float* dL_dmetallic)
+	float* dL_dmetallic,
+	const bool compute_material_maps)
 {
 	renderCUDA<NUM_CHANNELS><<<grid, block>>>(
 		W, H,
@@ -1034,7 +1048,8 @@ void BACKWARD::render(
 		dL_dnormals,
 		dL_dalbedo,
 		dL_droughness,
-			dL_dmetallic
+			dL_dmetallic,
+			compute_material_maps
 		);
 }
 
@@ -1049,25 +1064,37 @@ void BACKWARD::render_feature(
 	const uint32_t* n_contrib,
 	const float* dL_dpixels_feat,
 	const int feat_dim,
+	const int feat_chunk,
 	float* dL_dfeat)
 {
 	if (feat_dim <= 0)
 		return;
 
-	constexpr int kChunk = 16;
+	int kChunk = feat_chunk;
+	if (kChunk != 16 && kChunk != 32 && kChunk != 64 && kChunk != 128) {
+		kChunk = 16;
+	}
+
 	dim3 grid_feat = dim3(grid.x, grid.y, (feat_dim + kChunk - 1) / kChunk);
-	renderFeatureBackwardCUDA<kChunk><<<grid_feat, block>>>(
-		W,
-		H,
-		ranges,
-		point_list,
-		means2D,
-		conic_opacity,
-		final_Ts,
-		n_contrib,
-		dL_dpixels_feat,
-		feat_dim,
-		dL_dfeat);
+	switch (kChunk) {
+		case 32:
+			renderFeatureBackwardCUDA<32><<<grid_feat, block>>>(
+				W, H, ranges, point_list, means2D, conic_opacity, final_Ts, n_contrib, dL_dpixels_feat, feat_dim, dL_dfeat);
+			break;
+		case 64:
+			renderFeatureBackwardCUDA<64><<<grid_feat, block>>>(
+				W, H, ranges, point_list, means2D, conic_opacity, final_Ts, n_contrib, dL_dpixels_feat, feat_dim, dL_dfeat);
+			break;
+		case 128:
+			renderFeatureBackwardCUDA<128><<<grid_feat, block>>>(
+				W, H, ranges, point_list, means2D, conic_opacity, final_Ts, n_contrib, dL_dpixels_feat, feat_dim, dL_dfeat);
+			break;
+		case 16:
+		default:
+			renderFeatureBackwardCUDA<16><<<grid_feat, block>>>(
+				W, H, ranges, point_list, means2D, conic_opacity, final_Ts, n_contrib, dL_dpixels_feat, feat_dim, dL_dfeat);
+			break;
+	}
 }
 
 void BACKWARD::SSR(
