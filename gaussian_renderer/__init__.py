@@ -13,7 +13,7 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn.functional as F
-from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+from diff_gaussian_rasterization_wfeat import GaussianRasterizationSettings, GaussianRasterizer
 
 from arguments import GroupParams
 from scene.cameras import Camera

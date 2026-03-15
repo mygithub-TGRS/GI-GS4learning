@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
-from diff_gaussian_rasterization import Gaussian_SSR
+from diff_gaussian_rasterization_wfeat import Gaussian_SSR
 from tqdm import tqdm
 from PIL import Image
 from lpips import LPIPS
