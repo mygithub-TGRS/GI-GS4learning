@@ -62,6 +62,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         albedo: torch.Tensor,
         roughness: torch.Tensor,
         metallic: torch.Tensor,
+        feature: torch.Tensor,
         sh: torch.Tensor,
         colors_precomp: torch.Tensor,
         scales: torch.Tensor,
@@ -90,6 +91,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             albedo,
             roughness,
             metallic,
+            feature,
             scales,
             rotations,
             cov3Ds_precomp,
@@ -130,6 +132,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                     albedo_map,
                     roughness_map,
                     metallic_map,
+                    feature_map,
                 ) = _C.rasterize_gaussians(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
@@ -153,6 +156,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 albedo_map,
                 roughness_map,
                 metallic_map,
+                feature_map,
             ) = _C.rasterize_gaussians(*args)
 
         # Keep relevant tensors for backward
@@ -164,6 +168,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             albedo,
             roughness,
             metallic,
+            feature,
             means3D,
             scales,
             rotations,
@@ -184,7 +189,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             roughness_map,
             metallic_map,
             out_normal_view,
-            out_pos
+            out_pos,
+            feature_map,
         )
 
     @staticmethod
@@ -199,7 +205,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         grad_out_roughness: Optional[torch.Tensor] = None,
         grad_out_metallic: Optional[torch.Tensor] = None,
         grad_out_normal_view: Optional[torch.Tensor] = None,
-        grad_out_pos: Optional[torch.Tensor] = None
+        grad_out_pos: Optional[torch.Tensor] = None,
+        grad_out_feature: Optional[torch.Tensor] = None,
     ) -> Tuple[
         torch.Tensor,
         torch.Tensor,
@@ -225,6 +232,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             albedo,
             roughness,
             metallic,
+            feature,
             means3D,
             scales,
             rotations,
@@ -235,6 +243,9 @@ class _RasterizeGaussians(torch.autograd.Function):
             binningBuffer,
             imgBuffer,
         ) = ctx.saved_tensors
+
+        if grad_out_feature is None:
+            grad_out_feature = torch.Tensor([], device=means3D.device, dtype=means3D.dtype)
 
        
 
@@ -267,6 +278,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_out_albedo,
             grad_out_roughness,
             grad_out_metallic,
+            grad_out_feature,
             geomBuffer,
             binningBuffer,
             imgBuffer,
@@ -290,6 +302,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                     grad_albedo,
                     grad_roughness,
                     grad_metallic,
+                    grad_feature,
                     grad_means3D,
                     grad_cov3Ds_precomp,
                     grad_sh,
@@ -309,6 +322,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 grad_albedo,
                 grad_roughness,
                 grad_metallic,
+                grad_feature,
                 grad_means3D,
                 grad_cov3Ds_precomp,
                 grad_sh,
@@ -325,6 +339,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_albedo,
             grad_roughness,
             grad_metallic,
+            grad_feature,
             grad_sh,
             grad_colors_precomp,
             grad_scales,
@@ -396,6 +411,7 @@ class GaussianRasterizer(nn.Module):
         albedo: torch.Tensor,
         roughness: torch.Tensor,
         metallic: torch.Tensor,
+        feature: Optional[torch.Tensor] = None,
         shs: Optional[torch.Tensor] = None,
         colors_precomp: Optional[torch.Tensor] = None,
         scales: Optional[torch.Tensor] = None,
@@ -443,6 +459,8 @@ class GaussianRasterizer(nn.Module):
             rotations = torch.Tensor([])
         if cov3D_precomp is None:
             cov3D_precomp = torch.Tensor([])
+        if feature is None:
+            feature = torch.Tensor([], device=means3D.device, dtype=means3D.dtype)
 
         # Invoke C++/CUDA rasterization routine
         (
@@ -455,7 +473,8 @@ class GaussianRasterizer(nn.Module):
             roughness_map,
             metallic_map,
             out_normal_view,
-            _
+            _,
+            feature_map,
         ) = _RasterizeGaussians.apply(
             means3D,
             means2D,
@@ -464,6 +483,7 @@ class GaussianRasterizer(nn.Module):
             albedo,
             roughness,
             metallic,
+            feature,
             shs,
             colors_precomp,
             scales,
@@ -521,7 +541,7 @@ class GaussianRasterizer(nn.Module):
             # occlusion = torch.zeros_like(depth)
 
 
-        return (
+        outputs = (
             color,
             radii,
             opacity_map,
@@ -535,6 +555,10 @@ class GaussianRasterizer(nn.Module):
             out_normal_view,
             depth_pos_filter
         )
+
+        if feature.numel() > 0:
+            return outputs + (feature_map,)
+        return outputs
     
 
     
@@ -739,6 +763,5 @@ class Gaussian_SSR(nn.Module):
                 metallic,
                 F0
             )
-        
+
         return (color, abd)
-    

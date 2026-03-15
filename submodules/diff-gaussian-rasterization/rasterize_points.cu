@@ -128,7 +128,7 @@ LiteRasterizeGaussiansCUDA(
 
 
 std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
-	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,  	// [3, H, W]
 	const torch::Tensor& means3D,  		// [P, 3]
@@ -138,6 +138,7 @@ RasterizeGaussiansCUDA(
     const torch::Tensor& albedo,  		// [P, 3]
     const torch::Tensor& roughness,  	// [P, 1]
     const torch::Tensor& metallic,  	// [P, 1]
+	const torch::Tensor& feature,		// [P, F]
 	const torch::Tensor& scales,  		// [P, 3]
 	const torch::Tensor& rotations,  	// [P, 4]
 	const torch::Tensor& cov3D_precomp,	// [P, 6]
@@ -177,6 +178,8 @@ RasterizeGaussiansCUDA(
 	torch::Tensor out_albedo = torch::full({NUM_CHANNELS, H, W}, 0.0, float_opts);
 	torch::Tensor out_roughness = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor out_metallic = torch::full({1, H, W}, 0.0, float_opts);
+	const int F = feature.numel() > 0 ? feature.size(1) : 0;
+	torch::Tensor out_feature = torch::full({F, H, W}, 0.0, float_opts);
 	
 	torch::Device device(torch::kCUDA);
 	torch::TensorOptions options(torch::kByte);
@@ -194,7 +197,7 @@ RasterizeGaussiansCUDA(
 			M = sh.size(1);
 		}
 
-		rendered = CudaRasterizer::Rasterizer::forward(
+			rendered = CudaRasterizer::Rasterizer::forward(
 			geomFunc,
 			binningFunc,
 			imgFunc,
@@ -205,11 +208,13 @@ RasterizeGaussiansCUDA(
 			sh.contiguous().data_ptr<float>(),
 			colors.contiguous().data<float>(),
 			opacity.contiguous().data<float>(), 
-			normal.contiguous().data<float>(),
-			albedo.contiguous().data<float>(),
-			roughness.contiguous().data<float>(),
-			metallic.contiguous().data<float>(),
-			scales.contiguous().data_ptr<float>(),
+				normal.contiguous().data<float>(),
+				albedo.contiguous().data<float>(),
+				roughness.contiguous().data<float>(),
+				metallic.contiguous().data<float>(),
+				feature.contiguous().data<float>(),
+				F,
+				scales.contiguous().data_ptr<float>(),
 			scale_modifier,
 			rotations.contiguous().data_ptr<float>(),
 			cov3D_precomp.contiguous().data<float>(), 
@@ -227,11 +232,12 @@ RasterizeGaussiansCUDA(
 			out_normal.contiguous().data<float>(),
 			out_normal_view.contiguous().data<float>(),
 			out_pos.contiguous().data<float>(),
-			out_albedo.contiguous().data<float>(),
-			out_roughness.contiguous().data<float>(),
-			out_metallic.contiguous().data<float>(),
-			radii.contiguous().data<int>(),
-			debug);
+				out_albedo.contiguous().data<float>(),
+				out_roughness.contiguous().data<float>(),
+				out_metallic.contiguous().data<float>(),
+				out_feature.contiguous().data<float>(),
+				radii.contiguous().data<int>(),
+				debug);
   	}
   	return std::make_tuple(
 		rendered,
@@ -247,12 +253,13 @@ RasterizeGaussiansCUDA(
 		out_pos,
 		out_albedo,
 		out_roughness,
-		out_metallic
+		out_metallic,
+		out_feature
 	);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+	torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansBackwardCUDA(
  	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -277,10 +284,11 @@ RasterizeGaussiansBackwardCUDA(
     const torch::Tensor& dL_dout_color,
     const torch::Tensor& dL_dout_opacity,
     const torch::Tensor& dL_dout_normal,
-    const torch::Tensor& dL_dout_albedo,
-    const torch::Tensor& dL_dout_roughness,
-    const torch::Tensor& dL_dout_metallic,
-	const torch::Tensor& geomBuffer,
+	    const torch::Tensor& dL_dout_albedo,
+	    const torch::Tensor& dL_dout_roughness,
+	    const torch::Tensor& dL_dout_metallic,
+		const torch::Tensor& dL_dout_feature,
+		const torch::Tensor& geomBuffer,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	const int R,
@@ -306,6 +314,8 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_dalbedo = torch::zeros({P, 3}, means3D.options());
 	torch::Tensor dL_droughness = torch::zeros({P, 1}, means3D.options());
 	torch::Tensor dL_dmetallic = torch::zeros({P, 1}, means3D.options());
+	const int F = dL_dout_feature.numel() > 0 ? dL_dout_feature.size(0) : 0;
+	torch::Tensor dL_dfeature = torch::zeros({P, F}, means3D.options());
 	torch::Tensor dL_dcov3D = torch::zeros({P, 6}, means3D.options());
 	torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
 	torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
@@ -318,11 +328,12 @@ RasterizeGaussiansBackwardCUDA(
 			means3D.contiguous().data<float>(),
 			sh.contiguous().data<float>(),
 			colors.contiguous().data<float>(),
-			normal.contiguous().data<float>(),
-			albedo.contiguous().data<float>(),
-			roughness.contiguous().data<float>(),
-			metallic.contiguous().data<float>(),
-			scales.data_ptr<float>(),
+				normal.contiguous().data<float>(),
+				albedo.contiguous().data<float>(),
+				roughness.contiguous().data<float>(),
+				metallic.contiguous().data<float>(),
+				F,
+				scales.data_ptr<float>(),
 			rotations.data_ptr<float>(),
 			cov3D_precomp.contiguous().data<float>(),
 			viewmatrix.contiguous().data<float>(),
@@ -339,18 +350,20 @@ RasterizeGaussiansBackwardCUDA(
 			dL_dout_color.contiguous().data<float>(),
     		dL_dout_opacity.contiguous().data<float>(),
 			dL_dout_normal.contiguous().data<float>(),
-			dL_dout_albedo.contiguous().data<float>(),
-			dL_dout_roughness.contiguous().data<float>(),
-			dL_dout_metallic.contiguous().data<float>(),
-			dL_dmeans2D.contiguous().data<float>(),
+				dL_dout_albedo.contiguous().data<float>(),
+				dL_dout_roughness.contiguous().data<float>(),
+				dL_dout_metallic.contiguous().data<float>(),
+				dL_dout_feature.contiguous().data<float>(),
+				dL_dmeans2D.contiguous().data<float>(),
 			dL_dconic.contiguous().data<float>(), 
 			dL_depth.contiguous().data<float>(), 
 			dL_dopacity.contiguous().data<float>(),
 			dL_dnormal.contiguous().data<float>(),
-			dL_dalbedo.contiguous().data<float>(),
-			dL_droughness.contiguous().data<float>(),
-			dL_dmetallic.contiguous().data<float>(),
-			dL_dcolors.contiguous().data<float>(),
+				dL_dalbedo.contiguous().data<float>(),
+				dL_droughness.contiguous().data<float>(),
+				dL_dmetallic.contiguous().data<float>(),
+				dL_dfeature.contiguous().data<float>(),
+				dL_dcolors.contiguous().data<float>(),
 			dL_dmeans3D.contiguous().data<float>(),
 			dL_dcov3D.contiguous().data<float>(),
 			dL_dsh.contiguous().data<float>(),
@@ -360,7 +373,7 @@ RasterizeGaussiansBackwardCUDA(
 	}
 
 	return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dnormal, dL_dalbedo,
-		dL_droughness, dL_dmetallic, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations);
+		dL_droughness, dL_dmetallic, dL_dfeature, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations);
 }
 
 torch::Tensor markVisible(
