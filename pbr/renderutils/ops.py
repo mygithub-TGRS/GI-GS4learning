@@ -20,11 +20,14 @@ from .loss import *
 # C++/Cuda plugin compiler/loader.
 
 _cached_plugin = None
+_plugin_load_failed = False
 def _get_plugin():
     # Return cached plugin if already loaded.
-    global _cached_plugin
+    global _cached_plugin, _plugin_load_failed
     if _cached_plugin is not None:
         return _cached_plugin
+    if _plugin_load_failed:
+        return None
 
     # Make sure we can find the necessary compiler and libary binaries.
     if os.name == 'nt':
@@ -39,7 +42,9 @@ def _get_plugin():
         if os.system("where cl.exe >nul 2>nul") != 0:
             cl_path = find_cl_path()
             if cl_path is None:
-                raise RuntimeError("Could not locate a supported Microsoft Visual C++ installation")
+                print("Warning: Could not locate a supported Microsoft Visual C++ installation, falling back to PyTorch implementations")
+                _plugin_load_failed = True
+                return None
             os.environ['PATH'] += ';' + cl_path
 
     # Compiler options.
@@ -75,13 +80,19 @@ def _get_plugin():
 
     # Compile and load.
     source_paths = [os.path.join(os.path.dirname(__file__), fn) for fn in source_files]
-    torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
-         extra_cuda_cflags=opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
+    try:
+        torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
+             extra_cuda_cflags=opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
 
-    # Import, cache, and return the compiled module.
-    import renderutils_plugin
-    _cached_plugin = renderutils_plugin
-    return _cached_plugin
+        # Import, cache, and return the compiled module.
+        import renderutils_plugin
+        _cached_plugin = renderutils_plugin
+        return _cached_plugin
+    except Exception as e:
+        print(f"Warning: Failed to compile renderutils_plugin: {e}")
+        print("Falling back to PyTorch implementations for cubemap filtering.")
+        _plugin_load_failed = True
+        return None
 
 #----------------------------------------------------------------------------
 # Internal kernels, just used for testing functionality
@@ -388,6 +399,196 @@ def pbr_bsdf(kd, arm, pos, nrm, view_pos, light_pos, min_roughness=0.08, bsdf="l
 #----------------------------------------------------------------------------
 # cubemap filter with filtering across edges
 
+def _cube_to_dir(s, x, y):
+    """Convert cubemap face coordinates to 3D direction vectors."""
+    if s == 0:
+        rx, ry, rz = torch.ones_like(x), -y, -x
+    elif s == 1:
+        rx, ry, rz = -torch.ones_like(x), -y, x
+    elif s == 2:
+        rx, ry, rz = x, torch.ones_like(x), y
+    elif s == 3:
+        rx, ry, rz = x, -torch.ones_like(x), -y
+    elif s == 4:
+        rx, ry, rz = x, -y, torch.ones_like(x)
+    elif s == 5:
+        rx, ry, rz = -x, -y, -torch.ones_like(x)
+    return torch.stack((rx, ry, rz), dim=-1)
+
+def _diffuse_cubemap_pytorch(cubemap):
+    """Pure PyTorch implementation of diffuse irradiance cubemap convolution.
+
+    Args:
+        cubemap: [6, H, W, C] cubemap tensor
+    Returns:
+        [6, H, W, C] diffuse irradiance cubemap
+    """
+    import nvdiffrast.torch as dr
+
+    faces, res, _, channels = cubemap.shape
+    out = torch.zeros_like(cubemap)
+
+    # Generate sample directions for integration (on the hemisphere)
+    n_samples_theta = 64
+    n_samples_phi = 64 * 2
+
+    theta = torch.linspace(0, np.pi / 2.0, n_samples_theta, device=cubemap.device)
+    phi = torch.linspace(0, 2.0 * np.pi, n_samples_phi, device=cubemap.device)
+    d_theta = (np.pi / 2.0) / n_samples_theta
+    d_phi = (2.0 * np.pi) / n_samples_phi
+
+    sintheta = torch.sin(theta)
+    costheta = torch.cos(theta)
+
+    # For each face and texel, compute the normal and integrate
+    for s in range(6):
+        gy, gx = torch.meshgrid(
+            torch.linspace(-1.0 + 1.0 / res, 1.0 - 1.0 / res, res, device=cubemap.device),
+            torch.linspace(-1.0 + 1.0 / res, 1.0 - 1.0 / res, res, device=cubemap.device),
+            indexing='ij',
+        )
+        normal = torch.nn.functional.normalize(_cube_to_dir(s, gx, gy), dim=-1)  # [H, W, 3]
+
+        # Build a tangent frame for each normal
+        up = torch.zeros_like(normal)
+        up[..., 1] = 1.0
+        # Handle case where normal is parallel to up
+        mask = (torch.abs(normal[..., 1]) > 0.999)
+        up[mask, 0] = 1.0
+        up[mask, 1] = 0.0
+
+        tangent = torch.nn.functional.normalize(torch.cross(up, normal, dim=-1), dim=-1)
+        bitangent = torch.cross(normal, tangent, dim=-1)
+
+        irradiance = torch.zeros(res, res, channels, device=cubemap.device)
+
+        for i in range(n_samples_theta):
+            st = sintheta[i]
+            ct = costheta[i]
+            for j in range(n_samples_phi):
+                sp = torch.sin(phi[j])
+                cp = torch.cos(phi[j])
+
+                # Hemisphere sample in tangent space -> world space
+                sample_dir = (
+                    tangent * (st * cp).unsqueeze(-1) +
+                    bitangent * (st * sp).unsqueeze(-1) +
+                    normal * ct
+                )  # [H, W, 3]
+
+                # Sample the cubemap
+                color = dr.texture(
+                    cubemap[None, ...],
+                    sample_dir[None, ...].contiguous(),
+                    filter_mode='linear',
+                    boundary_mode='cube',
+                )[0]  # [H, W, C]
+
+                # cos(theta) * sin(theta) weighting
+                irradiance = irradiance + color * (ct * st * d_theta * d_phi)
+
+        out[s] = irradiance
+
+    # Normalize: integral of cos(theta)*sin(theta) over hemisphere = pi
+    # We already account for d_theta and d_phi in the sum
+    return out
+
+def _specular_cubemap_pytorch(cubemap, roughness, cutoff=0.99):
+    """Pure PyTorch implementation of specular cubemap filtering using GGX importance sampling.
+
+    Args:
+        cubemap: [6, H, W, C] cubemap tensor
+        roughness: float roughness value
+        cutoff: energy cutoff for NDF bounds
+    Returns:
+        [6, H, W, C] filtered specular cubemap
+    """
+    import nvdiffrast.torch as dr
+
+    faces, res, _, channels = cubemap.shape
+    alpha = roughness * roughness
+    alpha2 = alpha * alpha
+    out = torch.zeros(6, res, res, channels, device=cubemap.device, dtype=cubemap.dtype)
+
+    n_samples = 512
+
+    # Generate quasi-random samples using Hammersley sequence
+    def radical_inverse(n):
+        bits = 0
+        factor = 0.5
+        while n > 0:
+            bits += (n % 2) * factor
+            n //= 2
+            factor *= 0.5
+        return bits
+
+    samples_xi = torch.tensor(
+        [[float(i) / n_samples, radical_inverse(i)] for i in range(n_samples)],
+        device=cubemap.device, dtype=cubemap.dtype
+    )
+
+    for s in range(6):
+        gy, gx = torch.meshgrid(
+            torch.linspace(-1.0 + 1.0 / res, 1.0 - 1.0 / res, res, device=cubemap.device),
+            torch.linspace(-1.0 + 1.0 / res, 1.0 - 1.0 / res, res, device=cubemap.device),
+            indexing='ij',
+        )
+        normal = torch.nn.functional.normalize(_cube_to_dir(s, gx, gy), dim=-1)  # [H, W, 3]
+        view = normal  # For pre-filtered environment maps, V = N = R
+
+        # Build tangent frame
+        up = torch.zeros_like(normal)
+        up[..., 1] = 1.0
+        mask = (torch.abs(normal[..., 1]) > 0.999)
+        up[mask, 0] = 1.0
+        up[mask, 1] = 0.0
+        tangent = torch.nn.functional.normalize(torch.cross(up, normal, dim=-1), dim=-1)
+        bitangent = torch.cross(normal, tangent, dim=-1)
+
+        total_color = torch.zeros(res, res, channels, device=cubemap.device, dtype=cubemap.dtype)
+        total_weight = torch.zeros(res, res, 1, device=cubemap.device, dtype=cubemap.dtype)
+
+        for i in range(n_samples):
+            xi1 = samples_xi[i, 0].item()
+            xi2 = samples_xi[i, 1].item()
+
+            # GGX importance sampling
+            cos_theta = np.sqrt((1.0 - xi1) / (1.0 + (alpha2 - 1.0) * xi1))
+            sin_theta = np.sqrt(1.0 - cos_theta * cos_theta)
+            phi_val = 2.0 * np.pi * xi2
+
+            # Half vector in tangent space -> world space
+            h = (
+                tangent * (sin_theta * np.cos(phi_val)) +
+                bitangent * (sin_theta * np.sin(phi_val)) +
+                normal * cos_theta
+            )
+            h = torch.nn.functional.normalize(h, dim=-1)
+
+            # Reflect view around half vector to get light direction
+            light = 2.0 * (view * h).sum(dim=-1, keepdim=True) * h - view
+            light = torch.nn.functional.normalize(light, dim=-1)
+
+            ndotl = (normal * light).sum(dim=-1, keepdim=True).clamp(min=0.0)
+
+            # Only count samples where light is above the surface
+            valid = (ndotl > 0.0).float()
+
+            color = dr.texture(
+                cubemap[None, ...],
+                light[None, ...].contiguous(),
+                filter_mode='linear',
+                boundary_mode='cube',
+            )[0]  # [H, W, C]
+
+            total_color = total_color + color * ndotl * valid
+            total_weight = total_weight + ndotl * valid
+
+        # Normalize
+        out[s] = torch.where(total_weight > 0, total_color / total_weight, torch.zeros_like(total_color))
+
+    return out
+
 class _diffuse_cubemap_func(torch.autograd.Function):
     @staticmethod
     def forward(ctx, cubemap):
@@ -402,8 +603,9 @@ class _diffuse_cubemap_func(torch.autograd.Function):
         return cubemap_grad, None
 
 def diffuse_cubemap(cubemap, use_python=False):
-    if use_python:
-        assert False
+    plugin = _get_plugin()
+    if plugin is None or use_python:
+        out = _diffuse_cubemap_pytorch(cubemap)
     else:
         out = _diffuse_cubemap_func.apply(cubemap)
     if torch.is_anomaly_enabled():
@@ -446,16 +648,18 @@ __ndfBoundsDict = {}
 def specular_cubemap(cubemap, roughness, cutoff=0.99, use_python=False):
     assert cubemap.shape[0] == 6 and cubemap.shape[1] == cubemap.shape[2], "Bad shape for cubemap tensor: %s" % str(cubemap.shape)
 
-    if use_python:
-        assert False
+    plugin = _get_plugin()
+    if plugin is None or use_python:
+        out = _specular_cubemap_pytorch(cubemap, roughness, cutoff)
     else:
         key = (cubemap.shape[1], roughness, cutoff)
         if key not in __ndfBoundsDict:
             __ndfBoundsDict[key] = __ndfBounds(*key)
         out = _specular_cubemap.apply(cubemap, roughness, *__ndfBoundsDict[key])
+        out = out[..., 0:3] / out[..., 3:]
     if torch.is_anomaly_enabled():
         assert not torch.isnan(out).any(), "Output of specular_cubemap contains inf or NaN"
-    return out[..., 0:3] / out[..., 3:]
+    return out
 
 #----------------------------------------------------------------------------
 # Fast image loss function
